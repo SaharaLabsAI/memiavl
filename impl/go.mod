@@ -13,7 +13,7 @@ require (
 	github.com/cosmos/iavl v1.2.0
 	github.com/cosmos/ics23/go v0.10.0
 	github.com/ledgerwatch/erigon-lib v0.0.0-20230210071639-db0e7ed11263
-	github.com/stretchr/testify v1.8.4
+	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/btree v1.7.0
 	github.com/tidwall/gjson v1.10.2
 	github.com/tidwall/wal v1.1.7
@@ -40,7 +40,7 @@ require (
 	github.com/klauspost/compress v1.17.7 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
-	github.com/linxGnu/grocksdb v1.8.12 // indirect
+	github.com/linxGnu/grocksdb v1.9.8 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
