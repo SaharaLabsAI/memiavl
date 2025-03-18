@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+
 	"github.com/alitto/pond"
 	"github.com/tidwall/wal"
 )
@@ -141,6 +143,9 @@ const (
 )
 
 func Load(dir string, opts Options) (*DB, error) {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.Load")
+	defer span.End()
+
 	if err := opts.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid options: %w", err)
 	}
@@ -311,6 +316,9 @@ func (db *DB) SetInitialVersion(initialVersion int64) error {
 // ApplyUpgrades wraps MultiTree.ApplyUpgrades, it also append the upgrades in a pending log,
 // which will be persisted to the WAL in next Commit call.
 func (db *DB) ApplyUpgrades(upgrades []*TreeNameUpgrade) error {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.ApplyUpgrades")
+	defer span.End()
+
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
 
@@ -369,6 +377,9 @@ func (db *DB) ApplyChangeSet(name string, changeSet ChangeSet) error {
 }
 
 func (db *DB) applyChangeSet(name string, changeSet ChangeSet) error {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.applyChangeSet")
+	defer span.End()
+
 	if len(changeSet.Pairs) == 0 {
 		return nil
 	}
@@ -433,6 +444,9 @@ func (db *DB) CommittedVersion() (int64, error) {
 
 // checkBackgroundSnapshotRewrite check the result of background snapshot rewrite, cleans up the old snapshots and switches to a new multitree
 func (db *DB) checkBackgroundSnapshotRewrite() error {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.checkBackgroundSnapshotRewrite")
+	defer span.End()
+
 	// check the completeness of background snapshot rewriting
 	select {
 	case result := <-db.snapshotRewriteChan:
@@ -482,6 +496,9 @@ func (db *DB) checkBackgroundSnapshotRewrite() error {
 
 // pruneSnapshot prune the old snapshots
 func (db *DB) pruneSnapshots() {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.pruneSnapshots")
+	defer span.End()
+
 	// wait until last prune finish
 	db.pruneSnapshotLock.Lock()
 
@@ -533,6 +550,9 @@ func (db *DB) pruneSnapshots() {
 
 // Commit wraps SaveVersion to bump the version and writes the pending changes into log files to persist on disk
 func (db *DB) Commit() (int64, error) {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.Commit")
+	defer span.End()
+
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
 
@@ -621,6 +641,9 @@ func (db *DB) WaitAsyncCommit() error {
 }
 
 func (db *DB) waitAsyncCommit() error {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.waitAsyncCommit")
+	defer span.End()
+
 	if db.walChan == nil {
 		return nil
 	}
@@ -641,6 +664,9 @@ func (db *DB) Copy() *DB {
 }
 
 func (db *DB) copy(cacheSize int) *DB {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.copy")
+	defer span.End()
+
 	mtree := db.MultiTree.Copy(cacheSize)
 
 	return &DB{
@@ -658,6 +684,9 @@ func (db *DB) RewriteSnapshot() error {
 
 // RewriteSnapshotWithContext writes the current version of memiavl into a snapshot, and update the `current` symlink.
 func (db *DB) RewriteSnapshotWithContext(ctx context.Context) error {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.RewriteSnapshotWithContext")
+	defer span.End()
+
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
 
@@ -685,6 +714,9 @@ func (db *DB) Reload() error {
 }
 
 func (db *DB) reload() error {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.reload")
+	defer span.End()
+
 	mtree, err := LoadMultiTree(currentPath(db.dir), db.zeroCopy, db.cacheSize)
 	if err != nil {
 		return err
@@ -693,6 +725,9 @@ func (db *DB) reload() error {
 }
 
 func (db *DB) reloadMultiTree(mtree *MultiTree) error {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.reloadMultiTree")
+	defer span.End()
+
 	if err := db.MultiTree.Close(); err != nil {
 		return err
 	}
@@ -704,6 +739,9 @@ func (db *DB) reloadMultiTree(mtree *MultiTree) error {
 
 // rewriteIfApplicable execute the snapshot rewrite strategy according to current height
 func (db *DB) rewriteIfApplicable(height int64) {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.rewriteIfApplicable")
+	defer span.End()
+
 	if height%int64(db.snapshotInterval) != 0 {
 		return
 	}
@@ -732,6 +770,9 @@ func (db *DB) RewriteSnapshotBackground() error {
 }
 
 func (db *DB) rewriteSnapshotBackground() error {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.rewriteSnapshotBackground")
+	defer span.End()
+
 	if db.snapshotRewriteChan != nil {
 		return errors.New("there's another ongoing snapshot rewriting process")
 	}
@@ -862,6 +903,9 @@ func (db *DB) WriteSnapshot(dir string) error {
 
 // WriteSnapshotWithContext wraps MultiTree.WriteSnapshotWithContext to add a lock.
 func (db *DB) WriteSnapshotWithContext(ctx context.Context, dir string) error {
+	_, span := otel.Tracer(TracerName).Start(context.Background(), "DB.WriteSnapshotWithContext")
+	defer span.End()
+
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
 
