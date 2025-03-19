@@ -412,7 +412,7 @@ LOOP:
 				if expectedIndex <= endIndex {
 					return fmt.Errorf("incomplete WAL processing, expected up to %d, got to %d", endIndex, lastProcessedIndex)
 				}
-				return nil
+				break LOOP
 			}
 
 			if item.err != nil {
