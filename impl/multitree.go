@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"github.com/alitto/pond"
 	"github.com/tidwall/wal"
@@ -339,20 +340,119 @@ func (t *MultiTree) CatchupWAL(wal *wal.Log, endVersion int64) error {
 		return fmt.Errorf("target index %d is in the future, latest index: %d", endIndex, lastIndex)
 	}
 
-	for i := firstIndex; i <= endIndex; i++ {
-		bz, err := wal.Read(i)
-		if err != nil {
-			return fmt.Errorf("read wal log failed, %w", err)
-		}
-		var entry WALEntry
-		if err := entry.Unmarshal(bz); err != nil {
-			return fmt.Errorf("unmarshal wal log failed, %w", err)
-		}
-		if err := t.applyWALEntry(entry); err != nil {
-			return fmt.Errorf("replay wal entry failed, %w", err)
-		}
-		if _, err := t.SaveVersion(false); err != nil {
-			return fmt.Errorf("replay change set failed, %w", err)
+	//for i := firstIndex; i <= endIndex; i++ {
+	//	bz, err := wal.Read(i)
+	//	if err != nil {
+	//		return fmt.Errorf("read wal log failed, %w", err)
+	//	}
+	//	var entry WALEntry
+	//	if err := entry.Unmarshal(bz); err != nil {
+	//		return fmt.Errorf("unmarshal wal log failed, %w", err)
+	//	}
+	//	if err := t.applyWALEntry(entry); err != nil {
+	//		return fmt.Errorf("replay wal entry failed, %w", err)
+	//	}
+	//	if _, err := t.SaveVersion(false); err != nil {
+	//		return fmt.Errorf("replay change set failed, %w", err)
+	//	}
+	//}
+
+	var (
+		readWorkers = 10                         // concurrent reading wal
+		bufferSize  = lastIndex - firstIndex + 1 // chan size
+	)
+
+	type walItem struct {
+		index uint64
+		entry WALEntry
+		err   error
+	}
+
+	walChan := make(chan walItem, bufferSize)
+
+	var wg sync.WaitGroup
+	for w := 0; w < readWorkers; w++ {
+		wg.Add(1)
+		go func(workerId int) {
+			defer wg.Done()
+
+			for i := firstIndex + uint64(workerId); i <= endIndex; i += uint64(readWorkers) {
+				bz, err := wal.Read(i)
+				if err != nil {
+					walChan <- walItem{index: i, err: fmt.Errorf("read wal log failed at index %d: %w", i, err)}
+					return
+				}
+
+				var entry WALEntry
+				if err := entry.Unmarshal(bz); err != nil {
+					walChan <- walItem{index: i, err: fmt.Errorf("unmarshal wal log failed at index %d: %w", i, err)}
+					return
+				}
+
+				walChan <- walItem{index: i, entry: entry}
+			}
+		}(w)
+	}
+
+	go func() {
+		wg.Wait()
+		close(walChan)
+	}()
+
+	// main goroutine to process WAL
+	var lastProcessedIndex uint64
+	expectedIndex := firstIndex
+	pendingItems := make(map[uint64]walItem) // catch wal with larger id
+
+LOOP:
+	for {
+		select {
+		case item, ok := <-walChan:
+			if !ok {
+				if expectedIndex <= endIndex {
+					return fmt.Errorf("incomplete WAL processing, expected up to %d, got to %d", endIndex, lastProcessedIndex)
+				}
+				return nil
+			}
+
+			if item.err != nil {
+				return item.err
+			}
+
+			// process wal entry
+			if item.index == expectedIndex {
+				if err := t.applyWALEntry(item.entry); err != nil {
+					return fmt.Errorf("replay wal entry failed at index %d: %w", item.index, err)
+				}
+				if _, err := t.SaveVersion(false); err != nil {
+					return fmt.Errorf("replay change set failed at index %d: %w", item.index, err)
+				}
+				lastProcessedIndex = item.index
+				expectedIndex++
+
+			} else {
+				pendingItems[item.index] = item
+			}
+			// find expectedIndex from pending catch
+			for {
+				if nextItem, ok := pendingItems[expectedIndex]; ok {
+					if err := t.applyWALEntry(nextItem.entry); err != nil {
+						return fmt.Errorf("replay wal entry failed at index %d: %w", nextItem.index, err)
+					}
+					if _, err := t.SaveVersion(false); err != nil {
+						return fmt.Errorf("replay change set failed at index %d: %w", nextItem.index, err)
+					}
+					delete(pendingItems, expectedIndex)
+					lastProcessedIndex = expectedIndex
+					expectedIndex++
+				} else {
+					break
+				}
+			}
+		default:
+			if len(pendingItems) == 0 && lastProcessedIndex == endIndex {
+				break LOOP
+			}
 		}
 	}
 	t.UpdateCommitInfo()
