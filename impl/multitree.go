@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/alitto/pond"
 	"github.com/tidwall/wal"
@@ -340,103 +341,235 @@ func (t *MultiTree) CatchupWAL(wal *wal.Log, endVersion int64) error {
 		return fmt.Errorf("target index %d is in the future, latest index: %d", endIndex, lastIndex)
 	}
 
-	var (
-		readWorkers = 20                         // concurrent reading wal
-		bufferSize  = lastIndex - firstIndex + 1 // chan size
-	)
+	return t.processByRingBuffer(wal, firstIndex, endIndex)
+	//	var (
+	//		readWorkers = 20                         // concurrent reading wal
+	//		bufferSize  = lastIndex - firstIndex + 1 // chan size
+	//	)
+	//
+	//	type walItem struct {
+	//		index uint64
+	//		entry WALEntry
+	//		err   error
+	//	}
+	//
+	//	walChan := make(chan walItem, bufferSize)
+	//
+	//	var wg sync.WaitGroup
+	//	for w := 0; w < readWorkers; w++ {
+	//		wg.Add(1)
+	//		go func(workerId int) {
+	//			defer wg.Done()
+	//
+	//			for i := firstIndex + uint64(workerId); i <= endIndex; i += uint64(readWorkers) {
+	//				bz, err := wal.Read(i)
+	//				if err != nil {
+	//					walChan <- walItem{index: i, err: fmt.Errorf("read wal log failed at index %d: %w", i, err)}
+	//					return
+	//				}
+	//
+	//				var entry WALEntry
+	//				if err := entry.Unmarshal(bz); err != nil {
+	//					walChan <- walItem{index: i, err: fmt.Errorf("unmarshal wal log failed at index %d: %w", i, err)}
+	//					return
+	//				}
+	//
+	//				walChan <- walItem{index: i, entry: entry}
+	//			}
+	//		}(w)
+	//	}
+	//
+	//	go func() {
+	//		wg.Wait()
+	//		close(walChan)
+	//	}()
+	//
+	//	// main goroutine to process WAL
+	//	var lastProcessedIndex uint64
+	//	expectedIndex := firstIndex
+	//	pendingItems := make(map[uint64]walItem) // catch wal with larger id
+	//
+	//LOOP:
+	//	for {
+	//		select {
+	//		case item, ok := <-walChan:
+	//			if !ok {
+	//				if expectedIndex <= endIndex {
+	//					return fmt.Errorf("incomplete WAL processing, expected up to %d, got to %d", endIndex, lastProcessedIndex)
+	//				}
+	//				break LOOP
+	//			}
+	//
+	//			if item.err != nil {
+	//				return item.err
+	//			}
+	//
+	//			// process wal entry
+	//			if item.index == expectedIndex {
+	//				if err := t.applyWALEntry(item.entry); err != nil {
+	//					return fmt.Errorf("replay wal entry failed at index %d: %w", item.index, err)
+	//				}
+	//				if _, err := t.SaveVersion(false); err != nil {
+	//					return fmt.Errorf("replay change set failed at index %d: %w", item.index, err)
+	//				}
+	//				lastProcessedIndex = item.index
+	//				expectedIndex++
+	//
+	//			} else {
+	//				pendingItems[item.index] = item
+	//			}
+	//			// find expectedIndex from pending catch
+	//			for {
+	//				if nextItem, ok := pendingItems[expectedIndex]; ok {
+	//					if err := t.applyWALEntry(nextItem.entry); err != nil {
+	//						return fmt.Errorf("replay wal entry failed at index %d: %w", nextItem.index, err)
+	//					}
+	//					if _, err := t.SaveVersion(false); err != nil {
+	//						return fmt.Errorf("replay change set failed at index %d: %w", nextItem.index, err)
+	//					}
+	//					delete(pendingItems, expectedIndex)
+	//					lastProcessedIndex = expectedIndex
+	//					expectedIndex++
+	//				} else {
+	//					break
+	//				}
+	//			}
+	//		default:
+	//			if lastProcessedIndex == endIndex {
+	//				break LOOP
+	//			}
+	//		}
+	//	}
+	//
+	//	t.UpdateCommitInfo()
+	//	return nil
+}
 
+func (t *MultiTree) processByRingBuffer(wal *wal.Log, firstIndex, endIndex uint64) error {
 	type walItem struct {
 		index uint64
 		entry WALEntry
 		err   error
 	}
 
-	walChan := make(chan walItem, bufferSize)
+	readWorkers := 10
+	bufferSize := readWorkers * 2
+	if bufferSize > int(endIndex-firstIndex+1) {
+		bufferSize = int(endIndex - firstIndex + 1)
+	}
 
-	var wg sync.WaitGroup
+	ringBuffer := make([]walItem, bufferSize)
+	for i := range ringBuffer {
+		ringBuffer[i].index = -1 // -1 means can be used or reused
+	}
+
+	var (
+		mu               sync.Mutex
+		readPos          = 0
+		processPos       = 0
+		nextReadIndex    = firstIndex
+		nextProcessIndex = firstIndex
+		done             = false
+		errCh            = make(chan error, 1)
+	)
+
+	var workerWg sync.WaitGroup
+
+	// readWorkers read WALs concurrently
 	for w := 0; w < readWorkers; w++ {
-		wg.Add(1)
+		workerWg.Add(1)
 		go func(workerId int) {
-			defer wg.Done()
-
-			for i := firstIndex + uint64(workerId); i <= endIndex; i += uint64(readWorkers) {
-				bz, err := wal.Read(i)
-				if err != nil {
-					walChan <- walItem{index: i, err: fmt.Errorf("read wal log failed at index %d: %w", i, err)}
+			defer workerWg.Done()
+			for {
+				mu.Lock()
+				if nextReadIndex > endIndex {
+					mu.Unlock()
 					return
 				}
+				readIndex := nextReadIndex
+				nextReadIndex++
+				mu.Unlock()
 
+				bz, err := wal.Read(readIndex)
 				var entry WALEntry
-				if err := entry.Unmarshal(bz); err != nil {
-					walChan <- walItem{index: i, err: fmt.Errorf("unmarshal wal log failed at index %d: %w", i, err)}
-					return
+				if err == nil {
+					err = entry.Unmarshal(bz)
 				}
 
-				walChan <- walItem{index: i, entry: entry}
+				item := walItem{
+					index: readIndex,
+					entry: entry,
+					err:   err,
+				}
+
+				// insert ringBuffer
+				for {
+					mu.Lock()
+					if ringBuffer[readPos].index == -1 {
+						ringBuffer[readPos] = item
+						readPos = (readPos + 1) % bufferSize
+						mu.Unlock()
+						break
+					}
+					mu.Unlock()
+					time.Sleep(time.Millisecond)
+				}
 			}
 		}(w)
 	}
 
+	// process WAL
+	var processWg sync.WaitGroup
+	processWg.Add(1)
 	go func() {
-		wg.Wait()
-		close(walChan)
-	}()
+		defer processWg.Done()
+		for {
+			mu.Lock()
+			if done && nextProcessIndex > endIndex {
+				mu.Unlock()
+				errCh <- nil
+				return
+			}
+			item := ringBuffer[processPos]
+			if item.index == nextProcessIndex {
+				ringBuffer[processPos] = walItem{}
+				processPos = (processPos + 1) % bufferSize
+				mu.Unlock()
 
-	// main goroutine to process WAL
-	var lastProcessedIndex uint64
-	expectedIndex := firstIndex
-	pendingItems := make(map[uint64]walItem) // catch wal with larger id
-
-LOOP:
-	for {
-		select {
-		case item, ok := <-walChan:
-			if !ok {
-				if expectedIndex <= endIndex {
-					return fmt.Errorf("incomplete WAL processing, expected up to %d, got to %d", endIndex, lastProcessedIndex)
+				if item.err != nil {
+					errCh <- item.err
+					return
 				}
-				break LOOP
-			}
-
-			if item.err != nil {
-				return item.err
-			}
-
-			// process wal entry
-			if item.index == expectedIndex {
 				if err := t.applyWALEntry(item.entry); err != nil {
-					return fmt.Errorf("replay wal entry failed at index %d: %w", item.index, err)
+					errCh <- fmt.Errorf("replay wal entry failed at index %d: %w", item.index, err)
+					return
 				}
 				if _, err := t.SaveVersion(false); err != nil {
-					return fmt.Errorf("replay change set failed at index %d: %w", item.index, err)
+					errCh <- fmt.Errorf("replay change set failed at index %d: %w", item.index, err)
+					return
 				}
-				lastProcessedIndex = item.index
-				expectedIndex++
 
+				nextProcessIndex++
 			} else {
-				pendingItems[item.index] = item
-			}
-			// find expectedIndex from pending catch
-			for {
-				if nextItem, ok := pendingItems[expectedIndex]; ok {
-					if err := t.applyWALEntry(nextItem.entry); err != nil {
-						return fmt.Errorf("replay wal entry failed at index %d: %w", nextItem.index, err)
-					}
-					if _, err := t.SaveVersion(false); err != nil {
-						return fmt.Errorf("replay change set failed at index %d: %w", nextItem.index, err)
-					}
-					delete(pendingItems, expectedIndex)
-					lastProcessedIndex = expectedIndex
-					expectedIndex++
-				} else {
-					break
-				}
-			}
-		default:
-			if lastProcessedIndex == endIndex {
-				break LOOP
+				mu.Unlock()
+				time.Sleep(time.Millisecond)
 			}
 		}
+	}()
+
+	// wait all read worker finish
+	workerWg.Wait()
+	mu.Lock()
+	done = true
+	mu.Unlock()
+
+	// wait finish processing WAL
+	processWg.Wait()
+
+	close(errCh)
+	err := <-errCh
+	if err != nil {
+		return err
 	}
 
 	t.UpdateCommitInfo()
