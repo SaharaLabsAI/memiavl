@@ -340,25 +340,8 @@ func (t *MultiTree) CatchupWAL(wal *wal.Log, endVersion int64) error {
 		return fmt.Errorf("target index %d is in the future, latest index: %d", endIndex, lastIndex)
 	}
 
-	//for i := firstIndex; i <= endIndex; i++ {
-	//	bz, err := wal.Read(i)
-	//	if err != nil {
-	//		return fmt.Errorf("read wal log failed, %w", err)
-	//	}
-	//	var entry WALEntry
-	//	if err := entry.Unmarshal(bz); err != nil {
-	//		return fmt.Errorf("unmarshal wal log failed, %w", err)
-	//	}
-	//	if err := t.applyWALEntry(entry); err != nil {
-	//		return fmt.Errorf("replay wal entry failed, %w", err)
-	//	}
-	//	if _, err := t.SaveVersion(false); err != nil {
-	//		return fmt.Errorf("replay change set failed, %w", err)
-	//	}
-	//}
-
 	var (
-		readWorkers = 10                         // concurrent reading wal
+		readWorkers = 20                         // concurrent reading wal
 		bufferSize  = lastIndex - firstIndex + 1 // chan size
 	)
 
@@ -450,11 +433,12 @@ LOOP:
 				}
 			}
 		default:
-			if len(pendingItems) == 0 && lastProcessedIndex == endIndex {
+			if lastProcessedIndex == endIndex {
 				break LOOP
 			}
 		}
 	}
+
 	t.UpdateCommitInfo()
 	return nil
 }
