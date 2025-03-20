@@ -460,7 +460,7 @@ func (t *MultiTree) processByRingBuffer(wal *wal.Log, firstIndex, endIndex uint6
 
 	ringBuffer := make([]walItem, bufferSize)
 	for i := range ringBuffer {
-		ringBuffer[i].index = -1 // -1 means can be used or reused
+		ringBuffer[i].index = math.MaxUint64 // math.MaxUint64 means can be used or reused
 	}
 
 	var (
@@ -505,7 +505,7 @@ func (t *MultiTree) processByRingBuffer(wal *wal.Log, firstIndex, endIndex uint6
 				// insert ringBuffer
 				for {
 					mu.Lock()
-					if ringBuffer[readPos].index == -1 {
+					if ringBuffer[readPos].index == math.MaxUint64 {
 						ringBuffer[readPos] = item
 						readPos = (readPos + 1) % bufferSize
 						mu.Unlock()
