@@ -4,16 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/alitto/pond"
+	"github.com/tidwall/wal"
+	"golang.org/x/exp/slices"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
-	"time"
-
-	"github.com/alitto/pond"
-	"github.com/tidwall/wal"
-	"golang.org/x/exp/slices"
+	"sync/atomic"
 )
 
 const MetadataFileName = "__metadata"
@@ -342,107 +341,6 @@ func (t *MultiTree) CatchupWAL(wal *wal.Log, endVersion int64) error {
 	}
 
 	return t.processByRingBuffer(wal, firstIndex, endIndex)
-	//	var (
-	//		readWorkers = 20                         // concurrent reading wal
-	//		bufferSize  = lastIndex - firstIndex + 1 // chan size
-	//	)
-	//
-	//	type walItem struct {
-	//		index uint64
-	//		entry WALEntry
-	//		err   error
-	//	}
-	//
-	//	walChan := make(chan walItem, bufferSize)
-	//
-	//	var wg sync.WaitGroup
-	//	for w := 0; w < readWorkers; w++ {
-	//		wg.Add(1)
-	//		go func(workerId int) {
-	//			defer wg.Done()
-	//
-	//			for i := firstIndex + uint64(workerId); i <= endIndex; i += uint64(readWorkers) {
-	//				bz, err := wal.Read(i)
-	//				if err != nil {
-	//					walChan <- walItem{index: i, err: fmt.Errorf("read wal log failed at index %d: %w", i, err)}
-	//					return
-	//				}
-	//
-	//				var entry WALEntry
-	//				if err := entry.Unmarshal(bz); err != nil {
-	//					walChan <- walItem{index: i, err: fmt.Errorf("unmarshal wal log failed at index %d: %w", i, err)}
-	//					return
-	//				}
-	//
-	//				walChan <- walItem{index: i, entry: entry}
-	//			}
-	//		}(w)
-	//	}
-	//
-	//	go func() {
-	//		wg.Wait()
-	//		close(walChan)
-	//	}()
-	//
-	//	// main goroutine to process WAL
-	//	var lastProcessedIndex uint64
-	//	expectedIndex := firstIndex
-	//	pendingItems := make(map[uint64]walItem) // catch wal with larger id
-	//
-	//LOOP:
-	//	for {
-	//		select {
-	//		case item, ok := <-walChan:
-	//			if !ok {
-	//				if expectedIndex <= endIndex {
-	//					return fmt.Errorf("incomplete WAL processing, expected up to %d, got to %d", endIndex, lastProcessedIndex)
-	//				}
-	//				break LOOP
-	//			}
-	//
-	//			if item.err != nil {
-	//				return item.err
-	//			}
-	//
-	//			// process wal entry
-	//			if item.index == expectedIndex {
-	//				if err := t.applyWALEntry(item.entry); err != nil {
-	//					return fmt.Errorf("replay wal entry failed at index %d: %w", item.index, err)
-	//				}
-	//				if _, err := t.SaveVersion(false); err != nil {
-	//					return fmt.Errorf("replay change set failed at index %d: %w", item.index, err)
-	//				}
-	//				lastProcessedIndex = item.index
-	//				expectedIndex++
-	//
-	//			} else {
-	//				pendingItems[item.index] = item
-	//			}
-	//			// find expectedIndex from pending catch
-	//			for {
-	//				if nextItem, ok := pendingItems[expectedIndex]; ok {
-	//					if err := t.applyWALEntry(nextItem.entry); err != nil {
-	//						return fmt.Errorf("replay wal entry failed at index %d: %w", nextItem.index, err)
-	//					}
-	//					if _, err := t.SaveVersion(false); err != nil {
-	//						return fmt.Errorf("replay change set failed at index %d: %w", nextItem.index, err)
-	//					}
-	//					delete(pendingItems, expectedIndex)
-	//					lastProcessedIndex = expectedIndex
-	//					expectedIndex++
-	//				} else {
-	//					break
-	//				}
-	//			}
-	//		default:
-	//			if lastProcessedIndex == endIndex {
-	//				break LOOP
-	//			}
-	//		}
-	//	}
-	//
-	//	t.UpdateCommitInfo()
-	//	return nil
 }
 
 func (t *MultiTree) processByRingBuffer(wal *wal.Log, firstIndex, endIndex uint64) error {
@@ -452,122 +350,130 @@ func (t *MultiTree) processByRingBuffer(wal *wal.Log, firstIndex, endIndex uint6
 		err   error
 	}
 
-	readWorkers := 10
-	bufferSize := readWorkers * 2
-	if bufferSize > int(endIndex-firstIndex+1) {
-		bufferSize = int(endIndex - firstIndex + 1)
-	}
-
-	ringBuffer := make([]walItem, bufferSize)
+	readWorkers := 20
+	ringBuffer := make([]walItem, readWorkers)
 	for i := range ringBuffer {
-		ringBuffer[i].index = math.MaxUint64 // math.MaxUint64 means can be used or reused
+		ringBuffer[i].index = math.MaxUint64
 	}
 
 	var (
 		mu               sync.Mutex
-		readPos          = 0
-		processPos       = 0
-		nextReadIndex    = firstIndex
+		cond             = sync.NewCond(&mu) // to notify producers and consumers
 		nextProcessIndex = firstIndex
-		done             = false
 		errCh            = make(chan error, 1)
+		hasError         int32     // atomic to mark errors and avoid race conditions
+		once             sync.Once // ensure the error is sent only once.
 	)
 
+	// run producers
 	var workerWg sync.WaitGroup
-
-	// readWorkers read WALs concurrently
 	for w := 0; w < readWorkers; w++ {
 		workerWg.Add(1)
 		go func(workerId int) {
 			defer workerWg.Done()
-			for {
-				mu.Lock()
-				if nextReadIndex > endIndex {
-					mu.Unlock()
+
+			readIndex := firstIndex + uint64(workerId)
+
+			for readIndex <= endIndex {
+				if atomic.LoadInt32(&hasError) == 1 {
 					return
 				}
-				readIndex := nextReadIndex
-				nextReadIndex++
-				mu.Unlock()
 
+				// read and unmarshal WAL
 				bz, err := wal.Read(readIndex)
 				var entry WALEntry
 				if err == nil {
 					err = entry.Unmarshal(bz)
 				}
 
-				item := walItem{
+				mu.Lock()
+				for ringBuffer[workerId].index != math.MaxUint64 && atomic.LoadInt32(&hasError) == 0 {
+					cond.Wait() // wait consumer clear slot
+				}
+
+				if atomic.LoadInt32(&hasError) == 1 {
+					mu.Unlock()
+					return
+				}
+
+				ringBuffer[workerId] = walItem{
 					index: readIndex,
 					entry: entry,
 					err:   err,
 				}
+				mu.Unlock()
+				cond.Broadcast() // notice consumer
 
-				// insert ringBuffer
-				for {
-					mu.Lock()
-					if ringBuffer[readPos].index == math.MaxUint64 {
-						ringBuffer[readPos] = item
-						readPos = (readPos + 1) % bufferSize
-						mu.Unlock()
-						break
-					}
-					mu.Unlock()
-					time.Sleep(time.Millisecond)
-				}
+				readIndex += uint64(readWorkers)
 			}
 		}(w)
 	}
 
-	// process WAL
+	// start consumers
 	var processWg sync.WaitGroup
 	processWg.Add(1)
 	go func() {
 		defer processWg.Done()
-		for {
+
+		for nextProcessIndex <= endIndex {
 			mu.Lock()
-			if done && nextProcessIndex > endIndex {
+			workerIdx := int((nextProcessIndex - firstIndex) % uint64(readWorkers))
+			item := ringBuffer[workerIdx]
+
+			if item.index != nextProcessIndex {
+				cond.Wait() // wait producer
 				mu.Unlock()
-				errCh <- nil
+				continue
+			}
+
+			// process WAL
+			ringBuffer[workerIdx].index = math.MaxUint64
+			mu.Unlock()
+			cond.Broadcast() // notice producer to read next one
+
+			if item.err != nil {
+				once.Do(func() {
+					atomic.StoreInt32(&hasError, 1)
+					errCh <- fmt.Errorf("WAL error at index %d: %w", item.index, item.err)
+				})
 				return
 			}
-			item := ringBuffer[processPos]
-			if item.index == nextProcessIndex {
-				ringBuffer[processPos] = walItem{}
-				processPos = (processPos + 1) % bufferSize
-				mu.Unlock()
 
-				if item.err != nil {
-					errCh <- item.err
-					return
-				}
-				if err := t.applyWALEntry(item.entry); err != nil {
-					errCh <- fmt.Errorf("replay wal entry failed at index %d: %w", item.index, err)
-					return
-				}
-				if _, err := t.SaveVersion(false); err != nil {
-					errCh <- fmt.Errorf("replay change set failed at index %d: %w", item.index, err)
-					return
-				}
-
-				nextProcessIndex++
-			} else {
-				mu.Unlock()
-				time.Sleep(time.Millisecond)
+			if err := t.applyWALEntry(item.entry); err != nil {
+				once.Do(func() {
+					atomic.StoreInt32(&hasError, 1)
+					errCh <- fmt.Errorf("replay WAL entry failed at index %d: %w", item.index, err)
+				})
+				return
 			}
+
+			if _, err := t.SaveVersion(false); err != nil {
+				once.Do(func() {
+					atomic.StoreInt32(&hasError, 1)
+					errCh <- fmt.Errorf("save version failed at index %d: %w", item.index, err)
+				})
+				return
+			}
+
+			nextProcessIndex++
+		}
+
+		select {
+		case errCh <- nil:
+		default:
 		}
 	}()
 
-	// wait all read worker finish
 	workerWg.Wait()
-	mu.Lock()
-	done = true
-	mu.Unlock()
-
-	// wait finish processing WAL
 	processWg.Wait()
 
+	var err error
+	select {
+	case err = <-errCh:
+	default:
+	}
 	close(errCh)
-	err := <-errCh
+
 	if err != nil {
 		return err
 	}
