@@ -8,6 +8,9 @@ replace (
 	cosmossdk.io/store => ../sdk/store
 	github.com/cosmos/cosmos-sdk => ../../cosmos-sdk/
 	github.com/crypto-org-chain/cronos/memiavl => ../impl
+
+	// fix iterator timestamp
+	github.com/linxGnu/grocksdb => github.com/mmsqe/grocksdb v0.0.0-20250224034712-04aa63064718
 )
 
 require (
