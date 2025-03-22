@@ -209,6 +209,7 @@ func (s Store) Import(version int64, ch <-chan versiondb.ImportEntry) error {
 		batch.PutCFWithTS(s.cfHandle, key, ts[:], entry.Value)
 
 		counter++
+		fmt.Printf("import count %s", counter)
 		if counter%ImportCommitBatchSize == 0 {
 			if err := s.db.Write(defaultSyncWriteOpts, batch); err != nil {
 				return err
