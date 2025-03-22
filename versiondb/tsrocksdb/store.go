@@ -3,6 +3,7 @@ package tsrocksdb
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -205,6 +206,8 @@ func (s Store) Import(version int64, ch <-chan versiondb.ImportEntry) error {
 
 	var counter int
 	for entry := range ch {
+		fmt.Printf("imported app store %s key %s val %s\n", entry.StoreKey, hex.EncodeToString(entry.Key), hex.EncodeToString(entry.Value))
+
 		key := cloneAppend(storePrefix(entry.StoreKey), entry.Key)
 		batch.PutCFWithTS(s.cfHandle, key, ts[:], entry.Value)
 
