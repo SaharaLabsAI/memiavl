@@ -779,13 +779,13 @@ func (db *DB) rewriteSnapshotBackground() error {
 					return
 				}
 			} else {
-				cloned.logger.Info("finished best-effort WAL catchup", "version", cloned.Version(), "latest", mtree.Version())
+				cloned.logger.Info("finished best-effort WAL catchup", "version", cloned.Version(), "latest", mtree.Version(), "catchupWALTimes", i+1)
 				ch <- snapshotResult{mtree: mtree}
 				return
 			}
 		}
 
-		cloned.logger.Error("finished best-effort WAL catchup, still lag more than", "maxLagRange", MaxLagRange, "totalCatchupTimes", MaxCatchupTimes+1, "version", cloned.Version(), "latest", mtree.Version())
+		cloned.logger.Error("finished best-effort WAL catchup, still lag more than", "maxLagRange", MaxLagRange, "catchupTimes", MaxCatchupTimes, "version", cloned.Version(), "latest", mtree.Version())
 		ch <- snapshotResult{mtree: mtree}
 		return
 
