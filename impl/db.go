@@ -766,15 +766,14 @@ func (db *DB) rewriteSnapshotBackground() error {
 
 		// do a best effort catch-up, will do another final catch-up in main thread.
 		for i := 0; i < MaxCatchupTimes; i++ {
-			mtreeVersion := mtree.lastCommitInfo.Version
-			walLastIndex, err := wal.LastIndex()
+			walFirstId, walLastId, err := mtree.GetCatchupWALRange(wal)
 			if err != nil {
-				ch <- snapshotResult{err: fmt.Errorf("read wal last index failed while doing best effort catch-up, %w", err)}
+				ch <- snapshotResult{err: fmt.Errorf("get catchup wal range failed, %w", err)}
 				return
 			}
 
-			if int64(walLastIndex)-mtreeVersion > MaxLagRange {
-				if err := mtree.CatchupWAL(wal, 0); err != nil {
+			if walLastId-walFirstId > MaxLagRange {
+				if err := mtree.CatchupWALWithRange(wal, walFirstId, walLastId); err != nil {
 					ch <- snapshotResult{err: err}
 					return
 				}

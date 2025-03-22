@@ -343,6 +343,26 @@ func (t *MultiTree) CatchupWAL(wal *wal.Log, endVersion int64) error {
 	return t.processByRingBuffer(wal, firstIndex, endIndex)
 }
 
+// GetCatchupWALRange get the range of wal index from the oldest one to the latest one
+func (t *MultiTree) GetCatchupWALRange(wal *wal.Log) (uint64, uint64, error) {
+	lastIndex, err := wal.LastIndex()
+	if err != nil {
+		return 0, 0, fmt.Errorf("read wal last index failed, %w", err)
+	}
+
+	firstIndex := walIndex(nextVersion(t.Version(), t.initialVersion), t.initialVersion)
+
+	if lastIndex < firstIndex {
+		return 0, 0, fmt.Errorf("target index %d is pruned", lastIndex)
+	}
+
+	return firstIndex, lastIndex, nil
+}
+
+func (t *MultiTree) CatchupWALWithRange(wal *wal.Log, firstIndex, endIndex uint64) error {
+	return t.processByRingBuffer(wal, firstIndex, endIndex)
+}
+
 func (t *MultiTree) processByRingBuffer(wal *wal.Log, firstIndex, endIndex uint64) error {
 	type walItem struct {
 		index uint64
