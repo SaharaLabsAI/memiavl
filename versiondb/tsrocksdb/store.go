@@ -69,7 +69,7 @@ func (s *Store) SetSkipVersionZero(skip bool) {
 func (s Store) SetLatestVersion(version int64) error {
 	var ts [TimestampSize]byte
 	binary.LittleEndian.PutUint64(ts[:], uint64(version))
-	return s.db.Put(defaultWriteOpts, []byte(latestVersionKey), ts[:])
+	return s.db.Put(defaultSyncWriteOpts, []byte(latestVersionKey), ts[:])
 }
 
 // PutAtVersion implements VersionStore interface
@@ -210,7 +210,7 @@ func (s Store) Import(version int64, ch <-chan versiondb.ImportEntry) error {
 
 		counter++
 		if counter%ImportCommitBatchSize == 0 {
-			if err := s.db.Write(defaultWriteOpts, batch); err != nil {
+			if err := s.db.Write(defaultSyncWriteOpts, batch); err != nil {
 				return err
 			}
 			batch.Clear()
@@ -218,12 +218,16 @@ func (s Store) Import(version int64, ch <-chan versiondb.ImportEntry) error {
 	}
 
 	if batch.Count() > 0 {
-		if err := s.db.Write(defaultWriteOpts, batch); err != nil {
+		if err := s.db.Write(defaultSyncWriteOpts, batch); err != nil {
 			return err
 		}
 	}
 
-	return s.SetLatestVersion(version)
+	if err := s.SetLatestVersion(version); err != nil {
+		return err
+	}
+
+	return s.Flush()
 }
 
 func (s Store) Flush() error {
