@@ -773,6 +773,7 @@ func (db *DB) rewriteSnapshotBackground() error {
 			}
 
 			if walLastId-walFirstId > MaxLagRange {
+				cloned.logger.Debug("catchup wal while rewriteSnapshotBackground", "module", "memiavl", "round", i+1, "walFirstIndex", walFirstId, "walLastIndex", walLastId)
 				if err := mtree.CatchupWALWithRange(wal, walFirstId, walLastId); err != nil {
 					ch <- snapshotResult{err: err}
 					return
