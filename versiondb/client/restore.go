@@ -100,6 +100,8 @@ loop:
 		case *types.SnapshotItem_Store:
 			storeKey = item.Store.Name
 		case *types.SnapshotItem_IAVL:
+			fmt.Printf("key %s nil val %s\n", storeKey, item.IAVL.Key)
+
 			if storeKey == "" {
 				return errors.Wrap(err, "invalid protobuf message, store name is empty")
 			}
