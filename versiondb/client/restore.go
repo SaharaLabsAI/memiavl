@@ -112,6 +112,10 @@ loop:
 				Key:      item.IAVL.Key,
 				Value:    item.IAVL.Value,
 			}
+		case *types.SnapshotItem_Extension:
+			continue
+		case *types.SnapshotItem_ExtensionPayload:
+			continue
 		default:
 			break loop
 		}
