@@ -18,6 +18,8 @@ import (
 
 const (
 	DefaultSnapshotInterval    = 1000
+	DefaultMaxCatchupTimes     = 5
+	DefaultWalLagThreshold     = 10
 	LockFileName               = "LOCK"
 	DefaultSnapshotWriterLimit = 4
 	TmpSuffix                  = "-tmp"
@@ -57,6 +59,11 @@ type DB struct {
 	snapshotKeepRecent uint32
 	// block interval to take a new snapshot
 	snapshotInterval uint32
+	// the max times of catching up WALs async
+	maxCatchupTimes int
+	// the number to determine whether to proceed with the next round of catchupWAL, pass to main thread if less than walLagThreshold
+	walLagThreshold uint64
+
 	// make sure only one snapshot rewrite is running
 	pruneSnapshotLock      sync.Mutex
 	triggerStateSyncExport func(height int64)
@@ -101,6 +108,10 @@ type Options struct {
 	ZeroCopy bool
 	// CacheSize defines the cache's max entry size for each memiavl store.
 	CacheSize int
+	// the max times of catching up WALs async
+	MaxCatchupTimes int
+	// the number to determine whether to proceed with the next round of catchupWAL, pass to main thread if less than walLagThreshold
+	WalLagThreshold uint64
 	// LoadForOverwriting if true rollbacks the state, specifically the Load method will
 	// truncate the versions after the `TargetVersion`, the `TargetVersion` becomes the latest version.
 	// it do nothing if the target version is `0`.
@@ -132,6 +143,10 @@ func (opts *Options) FillDefaults() {
 
 	if opts.SnapshotWriterLimit <= 0 {
 		opts.SnapshotWriterLimit = DefaultSnapshotWriterLimit
+	}
+
+	if opts.MaxCatchupTimes < 1 {
+		opts.MaxCatchupTimes = DefaultMaxCatchupTimes
 	}
 }
 
@@ -244,6 +259,8 @@ func Load(dir string, opts Options) (*DB, error) {
 		walChanSize:            opts.AsyncCommitBuffer,
 		snapshotKeepRecent:     opts.SnapshotKeepRecent,
 		snapshotInterval:       opts.SnapshotInterval,
+		maxCatchupTimes:        opts.MaxCatchupTimes,
+		walLagThreshold:        opts.WalLagThreshold,
 		triggerStateSyncExport: opts.TriggerStateSyncExport,
 		snapshotWriterPool:     workerPool,
 	}
@@ -765,14 +782,14 @@ func (db *DB) rewriteSnapshotBackground() error {
 		}
 
 		// do a best effort catch-up, will do another final catch-up in main thread.
-		for i := 0; i < MaxCatchupTimes; i++ {
+		for i := 0; i < db.maxCatchupTimes; i++ {
 			walFirstId, walLastId, err := mtree.GetCatchupWALRange(wal)
 			if err != nil {
 				ch <- snapshotResult{err: fmt.Errorf("get catchup wal range failed, %w", err)}
 				return
 			}
 
-			if walLastId-walFirstId > MaxLagRange {
+			if walLastId-walFirstId > db.walLagThreshold {
 				cloned.logger.Debug("catchup wal while rewriteSnapshotBackground", "module", "memiavl", "round", i+1, "walFirstIndex", walFirstId, "walLastIndex", walLastId)
 				if err := mtree.CatchupWALWithRange(wal, walFirstId, walLastId); err != nil {
 					ch <- snapshotResult{err: err}

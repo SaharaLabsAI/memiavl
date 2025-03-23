@@ -29,4 +29,14 @@ snapshot-interval = {{ .MemIAVL.SnapshotInterval }}
 
 # CacheSize defines the size of the cache for each memiavl store, default to 1000.
 cache-size = {{ .MemIAVL.CacheSize }}
+
+# MaxCatchupTimes defines the max times of catching up WALs async
+# can not less than 1, default to 5
+max-catchup-times = {{ .MemIAVL.MaxCatchupTimes }}
+
+# WalLagThreshold determine whether to proceed with the next round of catchupWAL, 
+# pass to main thread if less than WalLagThreshold
+# default to 10, 
+# equals to set max-catchup-times=1 if set wal-lag-threshold a large number such as the MaxUint64(18446744073709551615)
+wal-lag-threshold = {{ .MemIAVL.WalLagThreshold }}
 `
