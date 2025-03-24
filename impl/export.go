@@ -35,6 +35,7 @@ func NewMultiTreeExporter(dir string, version uint32, supportExportNonSnapshotVe
 			ZeroCopy:            true,
 			ReadOnly:            true,
 			SnapshotWriterLimit: DefaultSnapshotWriterLimit,
+			WalReaders:          DefaultWalReaders,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("invalid height: %d, %w", version, err)
@@ -47,7 +48,7 @@ func NewMultiTreeExporter(dir string, version uint32, supportExportNonSnapshotVe
 		if int64(version) > curVersion {
 			return nil, fmt.Errorf("snapshot is not created yet: height: %d", version)
 		}
-		mtree, err = LoadMultiTree(filepath.Join(dir, snapshotName(int64(version))), true, 0)
+		mtree, err = LoadMultiTree(filepath.Join(dir, snapshotName(int64(version))), true, 0, DefaultWalReaders)
 		if err != nil {
 			return nil, fmt.Errorf("snapshot don't exists: height: %d, %w", version, err)
 		}

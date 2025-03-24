@@ -20,6 +20,7 @@ const (
 	DefaultSnapshotInterval    = 1000
 	DefaultMaxCatchupTimes     = 5
 	DefaultWalLagThreshold     = 10
+	DefaultWalReaders          = 20
 	LockFileName               = "LOCK"
 	DefaultSnapshotWriterLimit = 4
 	TmpSuffix                  = "-tmp"
@@ -108,6 +109,8 @@ type Options struct {
 	ZeroCopy bool
 	// CacheSize defines the cache's max entry size for each memiavl store.
 	CacheSize int
+	// number of readers to read WALs concurrently
+	WalReaders int
 	// the max times of catching up WALs async
 	MaxCatchupTimes int
 	// the number to determine whether to proceed with the next round of catchupWAL, pass to main thread if less than walLagThreshold
@@ -151,6 +154,10 @@ func (opts *Options) FillDefaults() {
 
 	if opts.WalLagThreshold < 1 {
 		opts.WalLagThreshold = DefaultWalLagThreshold
+	}
+
+	if opts.WalReaders == 0 {
+		opts.WalReaders = DefaultWalReaders
 	}
 }
 
@@ -198,7 +205,7 @@ func Load(dir string, opts Options) (*DB, error) {
 	}
 
 	path := filepath.Join(dir, snapshot)
-	mtree, err := LoadMultiTree(path, opts.ZeroCopy, opts.CacheSize)
+	mtree, err := LoadMultiTree(path, opts.ZeroCopy, opts.CacheSize, opts.WalReaders)
 	if err != nil {
 		return nil, err
 	}
@@ -706,7 +713,7 @@ func (db *DB) Reload() error {
 }
 
 func (db *DB) reload() error {
-	mtree, err := LoadMultiTree(currentPath(db.dir), db.zeroCopy, db.cacheSize)
+	mtree, err := LoadMultiTree(currentPath(db.dir), db.zeroCopy, db.cacheSize, db.walReaders)
 	if err != nil {
 		return err
 	}
@@ -774,7 +781,7 @@ func (db *DB) rewriteSnapshotBackground() error {
 			return
 		}
 		cloned.logger.Info("finished rewriting snapshot", "version", cloned.Version())
-		mtree, err := LoadMultiTree(currentPath(cloned.dir), cloned.zeroCopy, 0)
+		mtree, err := LoadMultiTree(currentPath(cloned.dir), cloned.zeroCopy, 0, db.walReaders)
 		if err != nil {
 			ch <- snapshotResult{err: err}
 			return

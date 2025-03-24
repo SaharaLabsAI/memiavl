@@ -21,11 +21,13 @@ type MemIAVLConfig struct {
 	SnapshotInterval uint32 `mapstructure:"snapshot-interval"`
 	// CacheSize defines the size of the cache for each memiavl store.
 	CacheSize int `mapstructure:"cache-size"`
-	// MaxCatchupTimes defines the max times of catching up WALs async
+	//  WalReaders defines the number of concurrent readers for WAL.
+	WalReaders int `mapstructure:"wal-readers"`
+	// MaxCatchupTimes defines the max times of catching up WALs async,
 	// can not less than 1.
 	MaxCatchupTimes int `mapstructure:"max-catchup-times"`
 	// WalLagThreshold determine whether to proceed with the next round of catchupWAL,
-	// pass to main thread if less than WalLagThreshold
+	// pass to main thread if less than WalLagThreshold.
 	WalLagThreshold uint64 `mapstructure:"wal-lag-threshold"`
 }
 
@@ -34,6 +36,7 @@ func DefaultMemIAVLConfig() MemIAVLConfig {
 		CacheSize:          DefaultCacheSize,
 		SnapshotInterval:   memiavl.DefaultSnapshotInterval,
 		SnapshotKeepRecent: 1,
+		WalReaders:         memiavl.DefaultWalReaders,
 		MaxCatchupTimes:    memiavl.DefaultMaxCatchupTimes,
 		WalLagThreshold:    memiavl.DefaultWalLagThreshold,
 	}

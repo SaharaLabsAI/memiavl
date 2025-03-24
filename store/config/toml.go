@@ -30,6 +30,9 @@ snapshot-interval = {{ .MemIAVL.SnapshotInterval }}
 # CacheSize defines the size of the cache for each memiavl store, default to 1000.
 cache-size = {{ .MemIAVL.CacheSize }}
 
+# WalReaders defines the number of concurrent readers for WAL.
+wal-readers = {{ .MemIAVL.WalReaders }}
+
 # MaxCatchupTimes defines the max times of catching up WALs async
 # can not less than 1, default to 5
 max-catchup-times = {{ .MemIAVL.MaxCatchupTimes }}

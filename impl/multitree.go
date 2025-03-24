@@ -42,8 +42,9 @@ type MultiTree struct {
 	// it always corresponds to the wal entry with index 1.
 	initialVersion uint32
 
-	zeroCopy  bool
-	cacheSize int
+	zeroCopy   bool
+	cacheSize  int
+	walReaders int
 
 	trees          []NamedTree    // always ordered by tree name
 	treesByName    map[string]int // index of the trees by name
@@ -53,16 +54,17 @@ type MultiTree struct {
 	metadata MultiTreeMetadata
 }
 
-func NewEmptyMultiTree(initialVersion uint32, cacheSize int) *MultiTree {
+func NewEmptyMultiTree(initialVersion uint32, cacheSize, walReaders int) *MultiTree {
 	return &MultiTree{
 		initialVersion: initialVersion,
 		treesByName:    make(map[string]int),
 		zeroCopy:       true,
 		cacheSize:      cacheSize,
+		walReaders:     walReaders,
 	}
 }
 
-func LoadMultiTree(dir string, zeroCopy bool, cacheSize int) (*MultiTree, error) {
+func LoadMultiTree(dir string, zeroCopy bool, cacheSize, walReaders int) (*MultiTree, error) {
 	metadata, err := readMetadata(dir)
 	if err != nil {
 		return nil, err
@@ -105,6 +107,7 @@ func LoadMultiTree(dir string, zeroCopy bool, cacheSize int) (*MultiTree, error)
 		metadata:       *metadata,
 		zeroCopy:       zeroCopy,
 		cacheSize:      cacheSize,
+		walReaders:     walReaders,
 	}
 	// initial version is nesserary for wal index conversion,
 	// overflow checked in `readMetadata`.
@@ -340,7 +343,7 @@ func (t *MultiTree) CatchupWAL(wal *wal.Log, endVersion int64) error {
 		return fmt.Errorf("target index %d is in the future, latest index: %d", endIndex, lastIndex)
 	}
 
-	return t.processByRingBuffer(wal, firstIndex, endIndex)
+	return t.readWALs(wal, firstIndex, endIndex)
 }
 
 // GetCatchupWALRange get the range of wal index from the oldest one to the latest one
@@ -360,17 +363,45 @@ func (t *MultiTree) GetCatchupWALRange(wal *wal.Log) (uint64, uint64, error) {
 }
 
 func (t *MultiTree) CatchupWALWithRange(wal *wal.Log, firstIndex, endIndex uint64) error {
-	return t.processByRingBuffer(wal, firstIndex, endIndex)
+	return t.readWALs(wal, firstIndex, endIndex)
 }
 
-func (t *MultiTree) processByRingBuffer(wal *wal.Log, firstIndex, endIndex uint64) error {
+func (t *MultiTree) readWALs(wal *wal.Log, firstIndex, endIndex uint64) error {
+	if t.walReaders == 1 {
+		return t.readWALsSequentially(wal, firstIndex, endIndex)
+	}
+	return t.readWALsConcurrently(wal, firstIndex, endIndex)
+}
+
+func (t *MultiTree) readWALsSequentially(wal *wal.Log, firstIndex, endIndex uint64) error {
+	for i := firstIndex; i <= endIndex; i++ {
+		bz, err := wal.Read(i)
+		if err != nil {
+			return fmt.Errorf("read wal log failed, %w", err)
+		}
+		var entry WALEntry
+		if err := entry.Unmarshal(bz); err != nil {
+			return fmt.Errorf("unmarshal wal log failed, %w", err)
+		}
+		if err := t.applyWALEntry(entry); err != nil {
+			return fmt.Errorf("replay wal entry failed, %w", err)
+		}
+		if _, err := t.SaveVersion(false); err != nil {
+			return fmt.Errorf("replay change set failed, %w", err)
+		}
+	}
+	t.UpdateCommitInfo()
+	return nil
+}
+
+func (t *MultiTree) readWALsConcurrently(wal *wal.Log, firstIndex, endIndex uint64) error {
 	type walItem struct {
 		index uint64
 		entry WALEntry
 		err   error
 	}
 
-	readWorkers := 20
+	readWorkers := t.walReaders
 	ringBuffer := make([]walItem, readWorkers)
 	for i := range ringBuffer {
 		ringBuffer[i].index = math.MaxUint64
