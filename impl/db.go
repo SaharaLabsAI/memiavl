@@ -148,6 +148,10 @@ func (opts *Options) FillDefaults() {
 	if opts.MaxCatchupTimes < 1 {
 		opts.MaxCatchupTimes = DefaultMaxCatchupTimes
 	}
+
+	if opts.WalLagThreshold < 1 {
+		opts.WalLagThreshold = DefaultWalLagThreshold
+	}
 }
 
 const (
@@ -747,11 +751,6 @@ func (db *DB) RewriteSnapshotBackground() error {
 
 	return db.rewriteSnapshotBackground()
 }
-
-const (
-	MaxCatchupTimes = 3
-	MaxLagRange     = 20
-)
 
 func (db *DB) rewriteSnapshotBackground() error {
 	if db.snapshotRewriteChan != nil {
