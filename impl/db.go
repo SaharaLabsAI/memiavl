@@ -801,7 +801,7 @@ func (db *DB) rewriteSnapshotBackground() error {
 			}
 		}
 
-		cloned.logger.Error("finished best-effort WAL catchup, still lag more than", "maxLagRange", MaxLagRange, "catchupTimes", MaxCatchupTimes, "version", cloned.Version(), "latest", mtree.Version())
+		cloned.logger.Error("finished best-effort WAL catchup, still lag more than", "walLagThreshold", db.walLagThreshold, "catchupTimes", db.maxCatchupTimes, "version", cloned.Version(), "latest", mtree.Version())
 		ch <- snapshotResult{mtree: mtree}
 		return
 

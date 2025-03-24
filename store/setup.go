@@ -21,6 +21,8 @@ const (
 	FlagSnapshotKeepRecent  = "memiavl.snapshot-keep-recent"
 	FlagSnapshotInterval    = "memiavl.snapshot-interval"
 	FlagCacheSize           = "memiavl.cache-size"
+	FlagMaxCatchupTimes     = "memiavl.max-catchup-times"
+	FlagWalLagThreshold     = "memiavl.wal-lag-threshold"
 	FlagSnapshotWriterLimit = "memiavl.snapshot-writer-limit"
 )
 
@@ -42,6 +44,8 @@ func SetupMemIAVL(
 			SnapshotKeepRecent:  cast.ToUint32(appOpts.Get(FlagSnapshotKeepRecent)),
 			SnapshotInterval:    cast.ToUint32(appOpts.Get(FlagSnapshotInterval)),
 			CacheSize:           cacheSize,
+			MaxCatchupTimes:     cast.ToInt(appOpts.Get(FlagMaxCatchupTimes)),
+			WalLagThreshold:     cast.ToUint64(appOpts.Get(FlagWalLagThreshold)),
 			SnapshotWriterLimit: cast.ToInt(appOpts.Get(FlagSnapshotWriterLimit)),
 		}
 
