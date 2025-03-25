@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"cosmossdk.io/log"
@@ -38,6 +39,7 @@ func SetupMemIAVL(
 	cacheSize int,
 	baseAppOptions []func(*baseapp.BaseApp),
 ) []func(*baseapp.BaseApp) {
+	fmt.Printf("|MEM-STORE-SETUP| SetupMemIAVL |WalReaders=%d\n", cast.ToInt(appOpts.Get(FlagWalReaders)))
 	if cast.ToBool(appOpts.Get(FlagMemIAVL)) {
 		opts := memiavl.Options{
 			AsyncCommitBuffer:   cast.ToInt(appOpts.Get(FlagAsyncCommitBuffer)),

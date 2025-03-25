@@ -13,6 +13,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const MetadataFileName = "__metadata"
@@ -367,6 +368,7 @@ func (t *MultiTree) CatchupWALWithRange(wal *wal.Log, firstIndex, endIndex uint6
 }
 
 func (t *MultiTree) readWALs(wal *wal.Log, firstIndex, endIndex uint64) error {
+	fmt.Println("|MEM-MULTI | readWALs| walReaders = ", t.walReaders)
 	if t.walReaders == 1 {
 		return t.readWALsSequentially(wal, firstIndex, endIndex)
 	}
@@ -374,6 +376,9 @@ func (t *MultiTree) readWALs(wal *wal.Log, firstIndex, endIndex uint64) error {
 }
 
 func (t *MultiTree) readWALsSequentially(wal *wal.Log, firstIndex, endIndex uint64) error {
+	tm := time.Now()
+	defer fmt.Printf("|MEM-MULTI | readWALs| readWALsSequentially | walReaders = %d, firstIndex = %d, endIndex = %d, finish-cost-time = %d", t.walReaders, firstIndex, endIndex, time.Since(tm).Microseconds())
+
 	for i := firstIndex; i <= endIndex; i++ {
 		bz, err := wal.Read(i)
 		if err != nil {
@@ -395,6 +400,9 @@ func (t *MultiTree) readWALsSequentially(wal *wal.Log, firstIndex, endIndex uint
 }
 
 func (t *MultiTree) readWALsConcurrently(wal *wal.Log, firstIndex, endIndex uint64) error {
+	tm := time.Now()
+	defer fmt.Printf("|MEM-MULTI | readWALs| readWALsConcurrently | walReaders = %d, firstIndex = %d, endIndex = %d, finish-cost-time = %d", t.walReaders, firstIndex, endIndex, time.Since(tm).Microseconds())
+
 	type walItem struct {
 		index uint64
 		entry WALEntry
