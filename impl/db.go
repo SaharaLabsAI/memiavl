@@ -173,7 +173,7 @@ func Load(dir string, opts Options) (*DB, error) {
 	opts.FillDefaults()
 
 	if opts.CreateIfMissing {
-		if err := createDBIfNotExist(dir, opts.InitialVersion); err != nil {
+		if err := createDBIfNotExist(dir, opts.InitialVersion, opts.WalReaders); err != nil {
 			return nil, fmt.Errorf("fail to load db: %w", err)
 		}
 	}
@@ -333,7 +333,7 @@ func (db *DB) SetInitialVersion(initialVersion int64) error {
 		return err
 	}
 
-	return initEmptyDB(db.dir, db.initialVersion)
+	return initEmptyDB(db.dir, db.initialVersion, db.walReaders)
 }
 
 // ApplyUpgrades wraps MultiTree.ApplyUpgrades, it also append the upgrades in a pending log,
@@ -796,7 +796,7 @@ func (db *DB) rewriteSnapshotBackground() error {
 			}
 
 			if walLastId-walFirstId > db.walLagThreshold {
-				cloned.logger.Info("start new round to catchup wal async", "module", "memiavl", "round", i+1, "walFirstIndex", walFirstId, "walLastIndex", walLastId, "latest-multitree-version", mtree.Version())
+				cloned.logger.Info("start new round to catchup wal async", "module", "memiavl", "round", i+1, "walFirstIndex", walFirstId, "walLastIndex", walLastId, "latest-multitree-version", mtree.Version(), "walReaders", mtree.walReaders)
 				if err := mtree.CatchupWALWithRange(wal, walFirstId, walLastId); err != nil {
 					ch <- snapshotResult{err: err}
 					return
@@ -1006,8 +1006,8 @@ func walPath(root string) string {
 //
 // current -> snapshot-0
 // ```
-func initEmptyDB(dir string, initialVersion uint32) error {
-	tmp := NewEmptyMultiTree(initialVersion, 0)
+func initEmptyDB(dir string, initialVersion uint32, walReaders int) error {
+	tmp := NewEmptyMultiTree(initialVersion, 0, walReaders)
 	snapshotDir := snapshotName(0)
 	// create tmp worker pool
 	pool := pond.New(DefaultSnapshotWriterLimit, DefaultSnapshotWriterLimit*10)
@@ -1080,10 +1080,10 @@ func atomicRemoveDir(path string) error {
 }
 
 // createDBIfNotExist detects if db does not exist and try to initialize an empty one.
-func createDBIfNotExist(dir string, initialVersion uint32) error {
+func createDBIfNotExist(dir string, initialVersion uint32, walReaders int) error {
 	_, err := os.Stat(filepath.Join(dir, "current", MetadataFileName))
 	if err != nil && os.IsNotExist(err) {
-		return initEmptyDB(dir, initialVersion)
+		return initEmptyDB(dir, initialVersion, walReaders)
 	}
 	return nil
 }

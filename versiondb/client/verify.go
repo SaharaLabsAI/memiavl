@@ -80,10 +80,10 @@ func VerifyChangeSetCmd(defaultStores []string) *cobra.Command {
 				{Name: capabilitytypes.MemStoreKey, CommitId: storetypes.CommitID{}},
 			}
 
-			mtree := memiavl.NewEmptyMultiTree(0, 0)
+			mtree := memiavl.NewEmptyMultiTree(0, 0, memiavl.DefaultWalReaders)
 			if len(loadSnapshot) > 0 {
 				var err error
-				mtree, err = memiavl.LoadMultiTree(loadSnapshot, true, 0)
+				mtree, err = memiavl.LoadMultiTree(loadSnapshot, true, 0, memiavl.DefaultWalReaders)
 				if err != nil {
 					return err
 				}
