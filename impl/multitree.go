@@ -377,8 +377,9 @@ func (t *MultiTree) readWALs(wal *wal.Log, firstIndex, endIndex uint64) error {
 
 func (t *MultiTree) readWALsSequentially(wal *wal.Log, firstIndex, endIndex uint64) error {
 	tm := time.Now()
-	defer fmt.Printf("|MEM-MULTI | readWALs| readWALsSequentially | walReaders = %d, firstIndex = %d, endIndex = %d, finish-cost-time = %d", t.walReaders, firstIndex, endIndex, time.Since(tm).Microseconds())
-
+	defer func() {
+		fmt.Printf("|MEM-MULTI | readWALs| readWALsSequentially | walReaders = %d, firstIndex = %d, endIndex = %d, finish-cost-time = %d\n", t.walReaders, firstIndex, endIndex, time.Since(tm).Microseconds())
+	}()
 	for i := firstIndex; i <= endIndex; i++ {
 		bz, err := wal.Read(i)
 		if err != nil {
@@ -401,7 +402,9 @@ func (t *MultiTree) readWALsSequentially(wal *wal.Log, firstIndex, endIndex uint
 
 func (t *MultiTree) readWALsConcurrently(wal *wal.Log, firstIndex, endIndex uint64) error {
 	tm := time.Now()
-	defer fmt.Printf("|MEM-MULTI | readWALs| readWALsConcurrently | walReaders = %d, firstIndex = %d, endIndex = %d, finish-cost-time = %d", t.walReaders, firstIndex, endIndex, time.Since(tm).Microseconds())
+	defer func() {
+		fmt.Printf("|MEM-MULTI | readWALs| readWALsConcurrently | walReaders = %d, firstIndex = %d, endIndex = %d, finish-cost-time = %d\n", t.walReaders, firstIndex, endIndex, time.Since(tm).Microseconds())
+	}()
 
 	type walItem struct {
 		index uint64
