@@ -1,4 +1,4 @@
-module github.com/SaharaLabsAI/memiavl
+module github.com/SaharaLabsAI/memiavl/rocksdb
 
 go 1.23.0
 
