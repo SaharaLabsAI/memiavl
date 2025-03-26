@@ -241,6 +241,16 @@ func Load(dir string, opts Options) (*DB, error) {
 			return nil, fmt.Errorf("fail to truncate wal logs: %w", err)
 		}
 
+		f, err := wal.FirstIndex()
+		if err != nil {
+			return nil, fmt.Errorf("|MEM-IMPL-DB| Load | fail to get wal first index: %w", err)
+		}
+		l, err := wal.LastIndex()
+		if err != nil {
+			return nil, fmt.Errorf("|MEM-IMPL-DB| Load | fail to get wal last index: %w", err)
+		}
+		fmt.Printf("|MEM-IMPL-DB| Load | after-truncate-back | wal.firstIndex = %d, wal.lastIndex = %d\n", f, l)
+
 		// prune snapshots that's larger than the target version
 		if err := traverseSnapshots(dir, false, func(version int64) (bool, error) {
 			if version <= int64(opts.TargetVersion) {
@@ -556,6 +566,17 @@ func (db *DB) pruneSnapshots() {
 		if err := db.wal.TruncateFront(walIndex(earliestVersion+1, db.initialVersion)); err != nil {
 			db.logger.Error("failed to truncate wal", "err", err, "version", earliestVersion+1)
 		}
+
+		f, err := db.wal.FirstIndex()
+		if err != nil {
+			db.logger.Error("|MEM-IMPL-DB| pruneSnapshot | failed to get wal first index", "err", err)
+		}
+		l, err := db.wal.LastIndex()
+		if err != nil {
+			db.logger.Error("|MEM-IMPL-DB| pruneSnapshot | failed to get wal last index", "err", err)
+		}
+
+		fmt.Printf("|MEM-IMPL-DB| pruneSnapshot | after-truncate-front | wal.firstIndex = %d, wal.lastIndex = %d\n", f, l)
 	}()
 }
 

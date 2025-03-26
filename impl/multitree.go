@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/alitto/pond"
-	"github.com/tidwall/wal"
-	"golang.org/x/exp/slices"
 	"math"
 	"os"
 	"path/filepath"
@@ -14,6 +11,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/alitto/pond"
+	"github.com/tidwall/wal"
+	"golang.org/x/exp/slices"
 )
 
 const MetadataFileName = "__metadata"
@@ -335,6 +336,7 @@ func (t *MultiTree) CatchupWAL(wal *wal.Log, endVersion int64) error {
 	if endVersion != 0 {
 		endIndex = walIndex(endVersion, t.initialVersion)
 	}
+	fmt.Printf("|MEM-IMPL-MULTI| CatchupWAL | endVersion = %d, firstIndex = %d, lastIndex = %d, endIndex = %d\n", endVersion, firstIndex, lastIndex, endIndex)
 
 	if endIndex < firstIndex {
 		return fmt.Errorf("target index %d is pruned", endIndex)
@@ -353,9 +355,11 @@ func (t *MultiTree) GetCatchupWALRange(wal *wal.Log) (uint64, uint64, error) {
 	if err != nil {
 		return 0, 0, fmt.Errorf("read wal last index failed, %w", err)
 	}
+	fmt.Printf("|MEM-IMPL-MULTI| GetCatchupWALRange | t.Version() = %d, t.initialVersion = %d, nextVersion = %d\n", t.Version(), t.initialVersion, nextVersion(t.Version(), t.initialVersion))
 
 	firstIndex := walIndex(nextVersion(t.Version(), t.initialVersion), t.initialVersion)
 
+	fmt.Printf("|MEM-IMPL-MULTI| GetCatchupWALRange | firstIndex = %d, lastIndex = %d\n", firstIndex, lastIndex)
 	if lastIndex < firstIndex {
 		return 0, 0, fmt.Errorf("target index %d is pruned", lastIndex)
 	}
