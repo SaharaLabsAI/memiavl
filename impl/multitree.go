@@ -296,8 +296,10 @@ func (t *MultiTree) SaveVersion(updateCommitInfo bool) (int64, error) {
 }
 
 func (t *MultiTree) buildCommitInfo(version int64) *CommitInfo {
+	fmt.Println("| MEM-IMPL | buildCommitInfo | start")
 	var infos []StoreInfo
 	for _, entry := range t.trees {
+		fmt.Printf("| MEM-IMPL | buildCommitInfo |  entry.Name = %s, entry.Version = %d, entry.RootHash = %x\n", entry.Name, entry.Version(), entry.RootHash())
 		infos = append(infos, StoreInfo{
 			Name: entry.Name,
 			CommitId: CommitID{
