@@ -4,15 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/alitto/pond"
-	"github.com/tidwall/wal"
-	"golang.org/x/exp/slices"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
+
+	"github.com/alitto/pond"
+	"github.com/tidwall/wal"
+	"golang.org/x/exp/slices"
 )
 
 const MetadataFileName = "__metadata"
@@ -294,6 +295,7 @@ func (t *MultiTree) SaveVersion(updateCommitInfo bool) (int64, error) {
 }
 
 func (t *MultiTree) buildCommitInfo(version int64) *CommitInfo {
+
 	var infos []StoreInfo
 	for _, entry := range t.trees {
 		infos = append(infos, StoreInfo{

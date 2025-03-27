@@ -121,6 +121,8 @@ type Options struct {
 	LoadForOverwriting bool
 
 	SnapshotWriterLimit int
+
+	StartupNode bool // truncate wals behind the snapshot height
 }
 
 func (opts Options) Validate() error {
@@ -215,7 +217,24 @@ func Load(dir string, opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	if opts.TargetVersion == 0 || int64(opts.TargetVersion) > mtree.Version() {
+	if opts.StartupNode {
+		// 1. load the latest commitInfo from wal
+		latestVersion, err := GetLatestVersion(dir)
+		if err != nil {
+			return nil, fmt.Errorf("fail to get latest version: %w", err)
+		}
+
+		// 2. update mtree.lastCommitInfo with the latest version
+		mtree.lastCommitInfo.Version = latestVersion
+		mtree.UpdateCommitInfo()
+
+		// 3. catchupWAL to the latest version async
+		clonedMtree := mtree.Copy(0)
+
+		// opts.TargetVersion = uint32(mtree.Version()) // 太武断了，这样后面的wals会被truncate掉
+		// todo: 应该像commit那样，先更新multitree的commitInfo，然后后台同步applyWals
+
+	} else if opts.TargetVersion == 0 || int64(opts.TargetVersion) > mtree.Version() {
 		if err := mtree.CatchupWAL(wal, int64(opts.TargetVersion)); err != nil {
 			return nil, errors.Join(err, wal.Close())
 		}
@@ -762,6 +781,64 @@ func (db *DB) RewriteSnapshotBackground() error {
 func (db *DB) rewriteSnapshotBackground() error {
 	if db.snapshotRewriteChan != nil {
 		return errors.New("there's another ongoing snapshot rewriting process")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ch := make(chan snapshotResult)
+	db.snapshotRewriteChan = ch
+	db.snapshotRewriteCancel = cancel
+
+	cloned := db.copy(0)
+	wal := db.wal
+	go func() {
+		defer close(ch)
+
+		cloned.logger.Info("start rewriting snapshot", "version", cloned.Version())
+		if err := cloned.RewriteSnapshotWithContext(ctx); err != nil {
+			ch <- snapshotResult{err: err}
+			return
+		}
+		cloned.logger.Info("finished rewriting snapshot", "version", cloned.Version())
+		mtree, err := LoadMultiTree(currentPath(cloned.dir), cloned.zeroCopy, 0, db.walReaders)
+		if err != nil {
+			ch <- snapshotResult{err: err}
+			return
+		}
+
+		// do a best effort catch-up, will do another final catch-up in main thread.
+		for i := 0; i < db.maxCatchupTimes; i++ {
+			walFirstId, walLastId, err := mtree.GetCatchupWALRange(wal)
+			if err != nil {
+				ch <- snapshotResult{err: fmt.Errorf("get catchup wal range failed, %w", err)}
+				return
+			}
+
+			if walLastId-walFirstId > db.walLagThreshold {
+				cloned.logger.Info("start new round to catchup wal async", "module", "memiavl", "round", i+1, "walFirstIndex", walFirstId, "walLastIndex", walLastId, "latest-multitree-version", mtree.Version(), "walReaders", mtree.walReaders)
+				if err := mtree.CatchupWALWithRange(wal, walFirstId, walLastId); err != nil {
+					ch <- snapshotResult{err: err}
+					return
+				}
+			} else {
+				cloned.logger.Info("finished best-effort WAL catchup, the left WALs amount is less than walLagThreshold", "version", cloned.Version(), "latest", mtree.Version(), "catchupWALTimes", i+1, "walFirstIndex", walFirstId, "walLastIndex", walLastId)
+				ch <- snapshotResult{mtree: mtree}
+				return
+			}
+		}
+
+		cloned.logger.Error("finished best-effort WAL catchup, still lag more than walLagThreshold", "walLagThreshold", db.walLagThreshold, "catchupTimes", db.maxCatchupTimes, "version", cloned.Version(), "latest", mtree.Version())
+		ch <- snapshotResult{mtree: mtree}
+		return
+
+	}()
+
+	return nil
+}
+
+func (db *DB) catchupWALBackgroundWhenStartup() error {
+	if db.snapshotRewriteChan != nil {
+		return errors.New("the snapshotRewriteChan shouldn't be nil when node startup")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
