@@ -215,6 +215,8 @@ func Load(dir string, opts Options) (*DB, error) {
 		return nil, err
 	}
 
+	fmt.Printf("|MEM-IMPL-DB| Load | mtree.Version() = %d, opts.TargetVersion = %d\n", mtree.Version(), opts.TargetVersion)
+
 	if opts.TargetVersion == 0 || int64(opts.TargetVersion) > mtree.Version() {
 		if err := mtree.CatchupWAL(wal, int64(opts.TargetVersion)); err != nil {
 			return nil, errors.Join(err, wal.Close())
