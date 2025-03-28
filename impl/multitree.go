@@ -344,7 +344,7 @@ func (t *MultiTree) CatchupWAL(wal *wal.Log, endVersion int64, logger Logger) er
 		return fmt.Errorf("target index %d is in the future, latest index: %d", endIndex, lastIndex)
 	}
 
-	return t.readWALs(wal, firstIndex, endIndex, logger)
+	return t.catchupWALs(wal, firstIndex, endIndex, logger)
 }
 
 // GetCatchupWALRange get the range of wal index from the oldest one to the latest one
@@ -355,26 +355,21 @@ func (t *MultiTree) GetCatchupWALRange(wal *wal.Log) (uint64, uint64, error) {
 	}
 
 	firstIndex := walIndex(nextVersion(t.Version(), t.initialVersion), t.initialVersion)
-
-	if lastIndex < firstIndex {
-		return 0, 0, fmt.Errorf("target index %d is pruned", lastIndex)
-	}
-
 	return firstIndex, lastIndex, nil
 }
 
 func (t *MultiTree) CatchupWALWithRange(wal *wal.Log, firstIndex, endIndex uint64, logger Logger) error {
-	return t.readWALs(wal, firstIndex, endIndex, logger)
+	return t.catchupWALs(wal, firstIndex, endIndex, logger)
 }
 
-func (t *MultiTree) readWALs(wal *wal.Log, firstIndex, endIndex uint64, logger Logger) error {
+func (t *MultiTree) catchupWALs(wal *wal.Log, firstIndex, endIndex uint64, logger Logger) error {
 	if t.walReaders == 1 {
-		return t.readWALsSequentially(wal, firstIndex, endIndex)
+		return t.catchupWALsSequentially(wal, firstIndex, endIndex)
 	}
-	return t.readWALsConcurrently(wal, firstIndex, endIndex, logger)
+	return t.catchupWALsConcurrently(wal, firstIndex, endIndex, logger)
 }
 
-func (t *MultiTree) readWALsSequentially(wal *wal.Log, firstIndex, endIndex uint64) error {
+func (t *MultiTree) catchupWALsSequentially(wal *wal.Log, firstIndex, endIndex uint64) error {
 	for i := firstIndex; i <= endIndex; i++ {
 		bz, err := wal.Read(i)
 		if err != nil {
@@ -395,7 +390,7 @@ func (t *MultiTree) readWALsSequentially(wal *wal.Log, firstIndex, endIndex uint
 	return nil
 }
 
-func (t *MultiTree) readWALsConcurrently(wal *wal.Log, firstIndex, endIndex uint64, logger Logger) error {
+func (t *MultiTree) catchupWALsConcurrently(wal *wal.Log, firstIndex, endIndex uint64, logger Logger) error {
 	type walItem struct {
 		index uint64
 		entry WALEntry
@@ -433,7 +428,7 @@ func (t *MultiTree) readWALsConcurrently(wal *wal.Log, firstIndex, endIndex uint
 
 				// read and unmarshal WAL
 				bz, err := wal.Read(readIndex)
-				logger.Info("producer read wal", "workerId", workerId, "index", readIndex)
+				logger.Debug("I'm producer, read wal", "workerId", workerId, "index", readIndex)
 				var entry WALEntry
 				if err == nil {
 					err = entry.Unmarshal(bz)
@@ -441,9 +436,9 @@ func (t *MultiTree) readWALsConcurrently(wal *wal.Log, firstIndex, endIndex uint
 
 				mu.Lock()
 				for ringBuffer[workerId].index != math.MaxUint64 && atomic.LoadInt32(&hasError) == 0 {
-					logger.Info("wait for consumer to clear slot, cond.Wait", "workerId", workerId, "index", ringBuffer[workerId].index, "readIndex", readIndex)
+					logger.Debug("I'm producer, wait for consumer to clear slot, cond.Wait", "workerId", workerId, "index", ringBuffer[workerId].index, "readIndex", readIndex)
 					cond.Wait() // wait consumer clear slot
-					logger.Info("consumer cleared slot, cond.Wait done", "workerId", workerId, "index", ringBuffer[workerId].index, "readIndex", readIndex)
+					logger.Debug("I'm producer, consumer cleared slot, cond.Wait done", "workerId", workerId, "index", ringBuffer[workerId].index, "readIndex", readIndex)
 				}
 
 				if atomic.LoadInt32(&hasError) == 1 {
@@ -476,9 +471,9 @@ func (t *MultiTree) readWALsConcurrently(wal *wal.Log, firstIndex, endIndex uint
 			item := ringBuffer[workerIdx]
 
 			if item.index != nextProcessIndex {
-				logger.Info("wait for producer to produce, cond.Wait", "workerId", workerIdx, "index", item.index, "nextProcessIndex", nextProcessIndex)
+				logger.Debug("I'm consumer, wait for producer to produce, cond.Wait", "workerId", workerIdx, "index", item.index, "nextProcessIndex", nextProcessIndex)
 				cond.Wait() // wait producer
-				logger.Info("producer produced, cond.Wait done", "workerId", workerIdx, "index", item.index, "nextProcessIndex", nextProcessIndex)
+				logger.Debug("I'm consumer, producer produced, cond.Wait done", "workerId", workerIdx, "index", item.index, "nextProcessIndex", nextProcessIndex)
 				mu.Unlock()
 				continue
 			}
@@ -495,7 +490,7 @@ func (t *MultiTree) readWALsConcurrently(wal *wal.Log, firstIndex, endIndex uint
 				})
 				return
 			}
-			logger.Info("consumer begin processing WAL", "workerId", workerIdx, "index", item.index)
+			logger.Debug("I'm consumer, begin processing WAL", "workerId", workerIdx, "index", item.index)
 
 			if err := t.applyWALEntry(item.entry); err != nil {
 				once.Do(func() {
@@ -513,7 +508,7 @@ func (t *MultiTree) readWALsConcurrently(wal *wal.Log, firstIndex, endIndex uint
 				return
 			}
 
-			logger.Info("consumed WAL", "workerId", workerIdx, "index", item.index)
+			logger.Debug("I'm consumer, consumed WAL", "workerId", workerIdx, "index", item.index)
 			nextProcessIndex++
 		}
 
@@ -538,6 +533,7 @@ func (t *MultiTree) readWALsConcurrently(wal *wal.Log, firstIndex, endIndex uint
 	}
 
 	t.UpdateCommitInfo()
+	logger.Info("catchupWALsConcurrently successfully")
 	return nil
 }
 

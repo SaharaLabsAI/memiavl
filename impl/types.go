@@ -7,6 +7,7 @@ type Logger interface {
 	Debug(msg string, keyvals ...interface{})
 	Info(msg string, keyvals ...interface{})
 	Error(msg string, keyvals ...interface{})
+	Warn(msg string, keyvals ...interface{})
 }
 
 type nopLogger struct{}
@@ -20,6 +21,7 @@ func NewNopLogger() Logger { return &nopLogger{} }
 func (nopLogger) Info(string, ...interface{})  {}
 func (nopLogger) Debug(string, ...interface{}) {}
 func (nopLogger) Error(string, ...interface{}) {}
+func (nopLogger) Warn(string, ...interface{})  {}
 
 // ExportNode contains exported node data.
 type ExportNode struct {

@@ -792,23 +792,23 @@ func (db *DB) rewriteSnapshotBackground() error {
 			walFirstId, walLastId, err := mtree.GetCatchupWALRange(wal)
 			if err != nil {
 				ch <- snapshotResult{err: fmt.Errorf("get catchup wal range failed, %w", err)}
-				return
 			}
+			cloned.logger.Info("background catchup wal range", "walFirstId", walFirstId, "walLastId", walLastId, "round", i+1)
 
-			if walLastId-walFirstId > db.walLagThreshold {
-				cloned.logger.Info("start new round to catchup wal async", "module", "memiavl", "round", i+1, "walFirstIndex", walFirstId, "walLastIndex", walLastId, "latest-multitree-version", mtree.Version(), "walReaders", mtree.walReaders)
+			if walLastId > walFirstId && walLastId-walFirstId > db.walLagThreshold {
+				cloned.logger.Info("start new round to catchup wal background", "module", "memiavl", "round", i+1, "walFirstIndex", walFirstId, "walLastIndex", walLastId, "latest-multitree-version", mtree.Version(), "walReaders", mtree.walReaders)
 				if err := mtree.CatchupWALWithRange(wal, walFirstId, walLastId, cloned.logger); err != nil {
 					ch <- snapshotResult{err: err}
 					return
 				}
 			} else {
-				cloned.logger.Info("finished best-effort WAL catchup, the left WALs amount is less than walLagThreshold", "version", cloned.Version(), "latest", mtree.Version(), "catchupWALTimes", i+1, "walFirstIndex", walFirstId, "walLastIndex", walLastId)
+				cloned.logger.Info("finished best-effort WAL catchup background, the left WALs amount is less than walLagThreshold", "version", cloned.Version(), "latest", mtree.Version(), "catchupWALTimes", i+1, "walFirstIndex", walFirstId, "walLastIndex", walLastId)
 				ch <- snapshotResult{mtree: mtree}
 				return
 			}
 		}
 
-		cloned.logger.Error("finished best-effort WAL catchup, still lag more than walLagThreshold", "walLagThreshold", db.walLagThreshold, "catchupTimes", db.maxCatchupTimes, "version", cloned.Version(), "latest", mtree.Version())
+		cloned.logger.Warn("finished best-effort WAL catchup background, still lag more than walLagThreshold", "walLagThreshold", db.walLagThreshold, "catchupTimes", db.maxCatchupTimes, "version", cloned.Version(), "latest", mtree.Version())
 		ch <- snapshotResult{mtree: mtree}
 		return
 
