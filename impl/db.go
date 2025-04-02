@@ -121,6 +121,8 @@ type Options struct {
 	LoadForOverwriting bool
 
 	SnapshotWriterLimit int
+
+	FastStartMode bool // truncate wals behind the snapshot height
 }
 
 func (opts Options) Validate() error {
@@ -215,7 +217,22 @@ func Load(dir string, opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	if opts.TargetVersion == 0 || int64(opts.TargetVersion) > mtree.Version() {
+	if opts.FastStartMode {
+		opts.Logger.Info("load with FastStartMode")
+		startupIndex := walIndex(mtree.Version(), mtree.initialVersion)
+		walLastIndex, err := wal.LastIndex()
+		if err != nil {
+			return nil, fmt.Errorf("get wal last index failed: %w", err)
+		}
+		if startupIndex < walLastIndex {
+			// truncate the WAL to snapshot height
+			opts.Logger.Info("truncate WAL from back for fast startup", "version", mtree.Version(), "truncateFromIndex", walLastIndex, "truncateToIndex", startupIndex)
+			if err := wal.TruncateBack(walIndex(mtree.Version(), mtree.initialVersion)); err != nil {
+				return nil, fmt.Errorf("fail to truncate wal logs: %w", err)
+			}
+		}
+
+	} else if opts.TargetVersion == 0 || int64(opts.TargetVersion) > mtree.Version() {
 		if err := mtree.CatchupWAL(wal, int64(opts.TargetVersion), opts.Logger); err != nil {
 			return nil, errors.Join(err, wal.Close())
 		}
@@ -235,10 +252,13 @@ func Load(dir string, opts Options) (*DB, error) {
 			}
 		}
 
-		// truncate the WAL
-		opts.Logger.Info("truncate WAL from back", "version", opts.TargetVersion)
-		if err := wal.TruncateBack(walIndex(int64(opts.TargetVersion), mtree.initialVersion)); err != nil {
-			return nil, fmt.Errorf("fail to truncate wal logs: %w", err)
+		// if FastStartMode, have truncated WALs to the snapshot height in the prev step
+		if !opts.FastStartMode {
+			// truncate the WAL
+			opts.Logger.Info("truncate WAL from back", "version", opts.TargetVersion)
+			if err := wal.TruncateBack(walIndex(int64(opts.TargetVersion), mtree.initialVersion)); err != nil {
+				return nil, fmt.Errorf("fail to truncate wal logs: %w", err)
+			}
 		}
 
 		// prune snapshots that's larger than the target version
@@ -599,6 +619,7 @@ func (db *DB) Commit() (int64, error) {
 	if err := db.checkAsyncTasks(); err != nil {
 		return 0, err
 	}
+
 	db.rewriteIfApplicable(v)
 
 	return v, nil
@@ -802,13 +823,13 @@ func (db *DB) rewriteSnapshotBackground() error {
 					return
 				}
 			} else {
-				cloned.logger.Info("finished best-effort WAL catchup background, the left WALs amount is less than walLagThreshold", "version", cloned.Version(), "latest", mtree.Version(), "catchupWALTimes", i+1, "walFirstIndex", walFirstId, "walLastIndex", walLastId)
+				cloned.logger.Info("finished best-effort WAL catchup background, the left WALs amount is less than walLagThreshold", "clonedDB.version", cloned.Version(), "mutitree.version", mtree.Version(), "catchupWALTimes", i+1, "walFirstIndex", walFirstId, "walLastIndex", walLastId)
 				ch <- snapshotResult{mtree: mtree}
 				return
 			}
 		}
 
-		cloned.logger.Warn("finished best-effort WAL catchup background, still lag more than walLagThreshold", "walLagThreshold", db.walLagThreshold, "catchupTimes", db.maxCatchupTimes, "version", cloned.Version(), "latest", mtree.Version())
+		cloned.logger.Warn("finished best-effort WAL catchup background, still lag more than walLagThreshold", "walLagThreshold", db.walLagThreshold, "catchupTimes", db.maxCatchupTimes, "clonedDB.version", cloned.Version(), "mutitree.version", mtree.Version())
 		ch <- snapshotResult{mtree: mtree}
 		return
 

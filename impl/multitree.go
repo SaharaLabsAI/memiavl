@@ -363,6 +363,7 @@ func (t *MultiTree) CatchupWALWithRange(wal *wal.Log, firstIndex, endIndex uint6
 }
 
 func (t *MultiTree) catchupWALs(wal *wal.Log, firstIndex, endIndex uint64, logger Logger) error {
+	logger.Info("catchupWALs", "firstIndex", firstIndex, "endIndex", endIndex)
 	if t.walReaders == 1 {
 		return t.catchupWALsSequentially(wal, firstIndex, endIndex)
 	}
