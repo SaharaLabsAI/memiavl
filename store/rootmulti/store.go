@@ -206,6 +206,7 @@ func (rs *Store) CacheMultiStoreWithVersion(version int64) (types.CacheMultiStor
 	opts := rs.opts
 	opts.TargetVersion = uint32(version)
 	opts.ReadOnly = true
+	opts.FastStartOpts.FastStartMode = false
 	db, err := memiavl.Load(rs.dir, opts)
 	if err != nil {
 		return nil, err
@@ -309,7 +310,7 @@ func (rs *Store) GetCommitKVStore(key types.StoreKey) types.CommitKVStore {
 // Implements interface CommitMultiStore
 // used by normal node startup.
 func (rs *Store) LoadLatestVersion() error {
-	rs.opts.FastStartMode = true
+	rs.opts.FastStartOpts.FastStartMode = true
 	return rs.LoadVersionAndUpgrade(0, nil)
 }
 
@@ -481,6 +482,7 @@ func (rs *Store) RollbackToVersion(target int64) error {
 	opts := rs.opts
 	opts.TargetVersion = uint32(target)
 	opts.LoadForOverwriting = true
+	opts.FastStartOpts.FastStartMode = false
 
 	var err error
 	rs.db, err = memiavl.Load(rs.dir, opts)
@@ -665,3 +667,8 @@ func convertCommitInfo(commitInfo *memiavl.CommitInfo) *types.CommitInfo {
 		StoreInfos: storeInfos,
 	}
 }
+
+// // GetObjKVStore implements types.CommitMultiStore.
+// func (rs *Store) GetObjKVStore(types.StoreKey) types.ObjKVStore {
+// 	panic("unimplemented")
+// }

@@ -2,6 +2,7 @@ package memiavl
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,15 @@ import (
 
 	"github.com/alitto/pond"
 	"github.com/tidwall/wal"
+
+	dbm "github.com/cometbft/cometbft-db"
+	cmtjson "github.com/cometbft/cometbft/libs/json"
+	cmtos "github.com/cometbft/cometbft/libs/os"
+	"github.com/cometbft/cometbft/libs/tempfile"
+	cmtfile "github.com/cometbft/cometbft/privval"
+	"github.com/cometbft/cometbft/state"
+	cmtstate "github.com/cometbft/cometbft/state"
+	cmtstore "github.com/cometbft/cometbft/store"
 )
 
 const (
@@ -122,7 +132,13 @@ type Options struct {
 
 	SnapshotWriterLimit int
 
-	FastStartMode bool // truncate wals behind the snapshot height
+	FastStartOpts FastStartOptions
+}
+
+type FastStartOptions struct {
+	FastStartMode        bool // truncate wals behind the snapshot height
+	BackendType          string
+	DiscardABCIResponses bool
 }
 
 func (opts Options) Validate() error {
@@ -217,21 +233,62 @@ func Load(dir string, opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	if opts.FastStartMode {
-		opts.Logger.Info("load with FastStartMode")
+	if opts.FastStartOpts.FastStartMode {
+		targetHeight := mtree.Version()
+		opts.Logger.Info("load with FastStartMode", "targetHeight", targetHeight)
+
+		// truncate WALs to snapshot height
 		startupIndex := walIndex(mtree.Version(), mtree.initialVersion)
 		walLastIndex, err := wal.LastIndex()
 		if err != nil {
 			return nil, fmt.Errorf("get wal last index failed: %w", err)
 		}
+
 		if startupIndex < walLastIndex {
 			// truncate the WAL to snapshot height
-			opts.Logger.Info("truncate WAL from back for fast startup", "version", mtree.Version(), "truncateFromIndex", walLastIndex, "truncateToIndex", startupIndex)
-			if err := wal.TruncateBack(walIndex(mtree.Version(), mtree.initialVersion)); err != nil {
+			opts.Logger.Info("truncate WAL from back for fast startup", "version", targetHeight, "truncateFromIndex", walLastIndex, "truncateToIndex", startupIndex)
+			if err := wal.TruncateBack(walIndex(targetHeight, mtree.initialVersion)); err != nil {
 				return nil, fmt.Errorf("fail to truncate wal logs: %w", err)
 			}
 		}
+		opts.Logger.Info("Truncated WALs with FastStartMode", "height", targetHeight)
 
+		// rollback cometbft state.db and blockstore.db to the startup height
+		dataDir := filepath.Dir(dir)
+		if err := RollBackStateAndBlockStore(dataDir, opts.FastStartOpts.BackendType, opts.FastStartOpts.DiscardABCIResponses, targetHeight, opts.Logger); err != nil {
+			return nil, fmt.Errorf("failed to rollback CometBFT state and block store: %w", err)
+		}
+		opts.Logger.Info("rolled back state and blockstore with FastStartMode", "height", targetHeight)
+
+		// clear priv_validator_state.json
+		stateFilePath := filepath.Join(dataDir, "priv_validator_state.json")
+		pvState := cmtfile.FilePVLastSignState{}
+		stateJSONBytes, err := os.ReadFile(stateFilePath)
+		if err != nil {
+			opts.Logger.Warn("read priv_validator_state.json failed with FastStartMode", "stateFilePath", stateFilePath, "err", err)
+		} else {
+			err = cmtjson.Unmarshal(stateJSONBytes, &pvState)
+			if err != nil {
+				cmtos.Exit(fmt.Sprintf("Error reading PrivValidator state from %v: %v\n", stateFilePath, err))
+			}
+
+			pvState.Height = targetHeight
+			pvState.Round = 0
+			pvState.Step = 0
+			pvState.Signature = nil
+			pvState.SignBytes = nil
+
+			jsonBytes, err := cmtjson.MarshalIndent(pvState, "", "  ")
+			if err != nil {
+				panic(err)
+			}
+			err = tempfile.WriteFileAtomic(stateFilePath, jsonBytes, 0600)
+			if err != nil {
+				panic(err)
+			}
+
+			opts.Logger.Info("clear priv_validator_state.json with FastStartMode", "height", targetHeight)
+		}
 	} else if opts.TargetVersion == 0 || int64(opts.TargetVersion) > mtree.Version() {
 		if err := mtree.CatchupWAL(wal, int64(opts.TargetVersion), opts.Logger); err != nil {
 			return nil, errors.Join(err, wal.Close())
@@ -253,7 +310,7 @@ func Load(dir string, opts Options) (*DB, error) {
 		}
 
 		// if FastStartMode, have truncated WALs to the snapshot height in the prev step
-		if !opts.FastStartMode {
+		if opts.FastStartOpts.FastStartMode {
 			// truncate the WAL
 			opts.Logger.Info("truncate WAL from back", "version", opts.TargetVersion)
 			if err := wal.TruncateBack(walIndex(int64(opts.TargetVersion), mtree.initialVersion)); err != nil {
@@ -308,6 +365,46 @@ func Load(dir string, opts Options) (*DB, error) {
 	}
 
 	return db, nil
+}
+
+// RollBackStateAndBlockStore rollback state.db and blockstore.db to target height
+// only called with fastStartMode
+func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIResponses bool, target int64, logger Logger) error {
+	if !cmtos.FileExists(filepath.Join(dbDir, "blockstore.db")) {
+		return fmt.Errorf("no blockstore found in %v", dbDir)
+	}
+
+	// Get BlockStore
+	blockStoreDB, err := dbm.NewDB("blockstore", dbm.BackendType(backendType), dbDir)
+	if err != nil {
+		return err
+	}
+	blockStore := cmtstore.NewBlockStore(blockStoreDB)
+
+	if !cmtos.FileExists(filepath.Join(dbDir, "state.db")) {
+		return fmt.Errorf("no statestore found in %v", dbDir)
+	}
+
+	// Get StateStore
+	stateDB, err := dbm.NewDB("state", dbm.BackendType(backendType), dbDir)
+	if err != nil {
+		return err
+	}
+	stateStore := cmtstate.NewStore(stateDB, state.StoreOptions{
+		DiscardABCIResponses: discardABCIResponses, //config.Storage.DiscardABCIResponses,
+	})
+
+	defer func() {
+		_ = blockStore.Close()
+		_ = stateStore.Close()
+	}()
+	// rollback state and block store
+	height, hash, err := cmtstate.RollbackTo(blockStore, stateStore, true, target)
+	if err != nil {
+		return fmt.Errorf("")
+	}
+	logger.Info("rollback state and block store finished", "height", height, "apphash", hex.EncodeToString(hash))
+	return nil
 }
 
 func removeTmpDirs(rootDir string) error {

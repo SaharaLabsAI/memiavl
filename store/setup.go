@@ -25,6 +25,7 @@ const (
 	FlagMaxCatchupTimes     = "memiavl.max-catchup-times"
 	FlagWalLagThreshold     = "memiavl.wal-lag-threshold"
 	FlagSnapshotWriterLimit = "memiavl.snapshot-writer-limit"
+	FlagFastStartMode       = "memiavl.fast-start-mode"
 )
 
 // SetupMemIAVL insert the memiavl setter in front of baseapp options, so that
@@ -36,6 +37,7 @@ func SetupMemIAVL(
 	sdk46Compact bool,
 	supportExportNonSnapshotVersion bool,
 	cacheSize int,
+	fastStartOpts memiavl.FastStartOptions,
 	baseAppOptions []func(*baseapp.BaseApp),
 ) []func(*baseapp.BaseApp) {
 	if cast.ToBool(appOpts.Get(FlagMemIAVL)) {
@@ -49,6 +51,7 @@ func SetupMemIAVL(
 			MaxCatchupTimes:     cast.ToInt(appOpts.Get(FlagMaxCatchupTimes)),
 			WalLagThreshold:     cast.ToUint64(appOpts.Get(FlagWalLagThreshold)),
 			SnapshotWriterLimit: cast.ToInt(appOpts.Get(FlagSnapshotWriterLimit)),
+			FastStartOpts:       fastStartOpts,
 		}
 
 		if opts.ZeroCopy {

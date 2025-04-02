@@ -29,6 +29,8 @@ type MemIAVLConfig struct {
 	// WalLagThreshold determine whether to proceed with the next round of catchupWAL,
 	// pass to main thread if less than WalLagThreshold.
 	WalLagThreshold uint64 `mapstructure:"wal-lag-threshold"`
+
+	FastStartMode bool `mapstructure:"fast-start-mode"`
 }
 
 func DefaultMemIAVLConfig() MemIAVLConfig {
@@ -39,5 +41,6 @@ func DefaultMemIAVLConfig() MemIAVLConfig {
 		WalReaders:         memiavl.DefaultWalReaders,
 		MaxCatchupTimes:    memiavl.DefaultMaxCatchupTimes,
 		WalLagThreshold:    memiavl.DefaultWalLagThreshold,
+		FastStartMode:      false,
 	}
 }
