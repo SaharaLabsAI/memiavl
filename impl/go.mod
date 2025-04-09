@@ -4,7 +4,7 @@ go 1.23.0
 
 toolchain go1.23.5
 
-replace github.com/cometbft/cometbft => github.com/SaharaLabsAI/cometbft v0.0.0-20250409065749-d196c3b4a37f
+replace github.com/cometbft/cometbft => github.com/SaharaLabsAI/cometbft v0.0.0-20250409120149-90eac3d096d1
 
 require (
 	cosmossdk.io/log v1.3.1
@@ -26,8 +26,6 @@ require (
 )
 
 require (
-	cosmossdk.io/errors v1.0.0 // indirect
-	cosmossdk.io/math v1.3.0 // indirect
 	github.com/DataDog/zstd v1.5.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -57,9 +55,6 @@ require (
 	github.com/google/flatbuffers v1.12.1 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
-	github.com/hashicorp/go-metrics v0.5.1 // indirect
-	github.com/hashicorp/golang-lru v1.0.2 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/jmhodges/levigo v1.0.0 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
