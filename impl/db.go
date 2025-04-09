@@ -371,6 +371,9 @@ func Load(dir string, opts Options) (*DB, error) {
 // only called with fastStartMode
 func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIResponses bool, target int64, logger Logger) error {
 	if !cmtos.FileExists(filepath.Join(dbDir, "blockstore.db")) {
+		if target == 0 {
+			return nil
+		}
 		return fmt.Errorf("no blockstore found in %v", dbDir)
 	}
 
@@ -391,17 +394,24 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 		return err
 	}
 	stateStore := cmtstate.NewStore(stateDB, state.StoreOptions{
-		DiscardABCIResponses: discardABCIResponses, //config.Storage.DiscardABCIResponses,
+		DiscardABCIResponses: discardABCIResponses,
 	})
 
 	defer func() {
 		_ = blockStore.Close()
 		_ = stateStore.Close()
 	}()
+
+	// rollback state and block store only if target is less than current height
+	if blockStore.Height() <= target {
+		logger.Info("do not have to rollback, because the blockstore's height is not larger than the target", "blockStoreHeight", blockStore.Height(), "target", target)
+		return nil
+	}
+
 	// rollback state and block store
 	height, hash, err := cmtstate.RollbackTo(blockStore, stateStore, true, target)
 	if err != nil {
-		return fmt.Errorf("")
+		return fmt.Errorf("state and block store rollback failed, target: %d, err: %w", target, err)
 	}
 	logger.Info("rollback state and block store finished", "height", height, "apphash", hex.EncodeToString(hash))
 	return nil

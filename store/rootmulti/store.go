@@ -667,8 +667,3 @@ func convertCommitInfo(commitInfo *memiavl.CommitInfo) *types.CommitInfo {
 		StoreInfos: storeInfos,
 	}
 }
-
-// // GetObjKVStore implements types.CommitMultiStore.
-// func (rs *Store) GetObjKVStore(types.StoreKey) types.ObjKVStore {
-// 	panic("unimplemented")
-// }
