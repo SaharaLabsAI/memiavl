@@ -136,9 +136,10 @@ type Options struct {
 }
 
 type FastStartOptions struct {
-	FastStartMode        bool // truncate wals behind the snapshot height
-	BackendType          string
-	DiscardABCIResponses bool
+	FastStartMode          bool // truncate wals behind the snapshot height
+	OverwriteFastStartMode bool
+	BackendType            string
+	DiscardABCIResponses   bool
 }
 
 func (opts Options) Validate() error {

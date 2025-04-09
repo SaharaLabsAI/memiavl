@@ -303,7 +303,7 @@ func (m *Manager) Restore(snapshot types.Snapshot) error {
 	chChunks := m.loadChunkStream(snapshot.Height, snapshot.Format, chChunkIDs)
 
 	go func() {
-		err := m.doRestoreSnapshot(snapshot, chChunks)
+		err := m.doRestoreSnapshot(snapshot, chChunks) //
 		chDone <- restoreDone{
 			complete: err == nil,
 			err:      err,
@@ -365,7 +365,7 @@ func (m *Manager) doRestoreSnapshot(snapshot types.Snapshot, chChunks <-chan io.
 
 	nextItem, err = m.multistore.Restore(snapshot.Height, snapshot.Format, streamReader)
 	if err != nil {
-		return errorsmod.Wrap(err, "multistore restore")
+		return errorsmod.Wrap(err, "multistore restore") //
 	}
 
 	for {

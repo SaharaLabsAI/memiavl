@@ -311,6 +311,9 @@ func (rs *Store) GetCommitKVStore(key types.StoreKey) types.CommitKVStore {
 // used by normal node startup.
 func (rs *Store) LoadLatestVersion() error {
 	rs.opts.FastStartOpts.FastStartMode = true
+	if rs.opts.FastStartOpts.OverwriteFastStartMode {
+		rs.opts.FastStartOpts.FastStartMode = false
+	}
 	return rs.LoadVersionAndUpgrade(0, nil)
 }
 
