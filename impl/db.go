@@ -426,8 +426,19 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 	}
 
 	// rollback state and block store
-	height, hash, err := cmtstate.RollbackTo(blockStore, stateStore, true, target)
+	height, hash, err := cmtstate.RollbackTo(blockStore, stateStore, target)
 	if err != nil {
+		if errors.Is(err, cmtstate.ErrTargetHeightNotFound) {
+			// target equals to 0 or statesync snapshot height
+			// can not rollback blockstore to these height, so remove state.db and blockstore.db
+			if err = os.RemoveAll(filepath.Join(dbDir, "blockstore.db")); err != nil {
+				logger.Warn("remove blockstore.db failed", "err", err)
+			}
+			if err = os.RemoveAll(filepath.Join(dbDir, "state.db")); err != nil {
+				logger.Warn("remove state.db failed", "err", err)
+			}
+			return nil
+		}
 		return fmt.Errorf("state and block store rollback failed, target: %d, err: %w", target, err)
 	}
 	logger.Info("rollback state and block store finished", "height", height, "apphash", hex.EncodeToString(hash))

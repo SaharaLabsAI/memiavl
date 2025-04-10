@@ -4,8 +4,7 @@ go 1.23.0
 
 toolchain go1.23.5
 
-replace github.com/cometbft/cometbft => github.com/SaharaLabsAI/cometbft v0.0.0-20250409124326-a345d6f678ae
-
+replace github.com/cometbft/cometbft => github.com/SaharaLabsAI/cometbft v0.0.0-20250410114757-625f6bbb31db
 require (
 	cosmossdk.io/log v1.3.1
 	cosmossdk.io/store v1.1.0
