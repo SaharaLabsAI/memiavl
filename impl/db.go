@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/alitto/pond"
-	"github.com/tidwall/wal"
+	_wal "github.com/tidwall/wal"
 
 	dbm "github.com/cometbft/cometbft-db"
 	cmtjson "github.com/cometbft/cometbft/libs/json"
@@ -80,7 +80,7 @@ type DB struct {
 	triggerStateSyncExport func(height int64)
 
 	// invariant: the LastIndex always match the current version of MultiTree
-	wal         *wal.Log
+	wal         *_wal.Log
 	walChanSize int
 	walChan     chan *walEntry
 	walQuit     chan error
@@ -228,8 +228,8 @@ func Load(dir string, opts Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	wal, err := OpenWAL(walPath(dir), &wal.Options{NoCopy: true, NoSync: true})
+	walPath := walPath(dir)
+	wal, err := OpenWAL(walPath, &_wal.Options{NoCopy: true, NoSync: true})
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +248,23 @@ func Load(dir string, opts Options) (*DB, error) {
 		if startupIndex < walLastIndex {
 			// truncate the WAL to snapshot height
 			opts.Logger.Info("truncate WAL from back for fast startup", "version", targetHeight, "truncateFromIndex", walLastIndex, "truncateToIndex", startupIndex)
-			if err := wal.TruncateBack(walIndex(targetHeight, mtree.initialVersion)); err != nil {
+			if startupIndex == 0 {
+				opts.Logger.Info("have to truncate WAL to index 0, so clear the wal dir")
+				// don't truncate but remove this WAL file
+				if err = wal.Close(); err != nil {
+					return nil, fmt.Errorf("fail to close wal: %w", err)
+				}
+
+				if err := os.RemoveAll(walPath); err != nil {
+					return nil, fmt.Errorf("fail to remove wal dir, path: %s, err: %w", walPath, err)
+				}
+				wal, err = OpenWAL(walPath, &_wal.Options{NoCopy: true, NoSync: true})
+				if err != nil {
+					return nil, err
+				}
+				opts.Logger.Info("removed and reopen WAL", "walPath", walPath)
+
+			} else if err := wal.TruncateBack(startupIndex); err != nil {
 				return nil, fmt.Errorf("fail to truncate wal logs: %w", err)
 			}
 		}
@@ -311,7 +327,7 @@ func Load(dir string, opts Options) (*DB, error) {
 		}
 
 		// if FastStartMode, have truncated WALs to the snapshot height in the prev step
-		if opts.FastStartOpts.FastStartMode {
+		if !opts.FastStartOpts.FastStartMode {
 			// truncate the WAL
 			opts.Logger.Info("truncate WAL from back", "version", opts.TargetVersion)
 			if err := wal.TruncateBack(walIndex(int64(opts.TargetVersion), mtree.initialVersion)); err != nil {
@@ -740,7 +756,7 @@ func (db *DB) initAsyncCommit() {
 	go func() {
 		defer close(walQuit)
 
-		batch := wal.Batch{}
+		batch := _wal.Batch{}
 		for {
 			entries := channelBatchRecv(walChan)
 			if len(entries) == 0 {
@@ -1238,7 +1254,7 @@ func GetLatestVersion(dir string) (int64, error) {
 		return 0, err
 	}
 
-	wal, err := OpenWAL(walPath(dir), &wal.Options{NoCopy: true})
+	wal, err := OpenWAL(walPath(dir), &_wal.Options{NoCopy: true})
 	if err != nil {
 		return 0, err
 	}
