@@ -516,6 +516,11 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 				opts.Logger.Error("Failed to store last seen commit", "err", err)
 				return err
 			}
+
+			err = stateStore.SetOfflineStateSyncHeight(targetState.LastBlockHeight)
+			if err != nil {
+				return fmt.Errorf("failed to set synced height: %w", err)
+			}
 		}
 	}
 
