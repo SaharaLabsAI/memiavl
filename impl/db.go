@@ -434,9 +434,17 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 			if err = os.RemoveAll(filepath.Join(dbDir, "blockstore.db")); err != nil {
 				logger.Warn("remove blockstore.db failed", "err", err)
 			}
-			if err = os.RemoveAll(filepath.Join(dbDir, "state.db")); err != nil {
-				logger.Warn("remove state.db failed", "err", err)
+			if target == 0 {
+				// Remove state.db only if target is 0.
+				// If target > 0 && blockstore can not find the target block,
+				// it means rollback to snapshot height synced from other peer.
+				// State will be rebuilded after restoring this snapshot,
+				// do not remove it.
+				if err = os.RemoveAll(filepath.Join(dbDir, "state.db")); err != nil {
+					logger.Warn("remove state.db failed", "err", err)
+				}
 			}
+
 			return nil
 		}
 		return fmt.Errorf("state and block store rollback failed, target: %d, err: %w", target, err)
