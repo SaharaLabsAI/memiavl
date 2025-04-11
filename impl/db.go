@@ -18,11 +18,13 @@ import (
 
 	dbm "github.com/cometbft/cometbft-db"
 	cmtjson "github.com/cometbft/cometbft/libs/json"
+	cmtlog "github.com/cometbft/cometbft/libs/log"
 	cmtos "github.com/cometbft/cometbft/libs/os"
 	"github.com/cometbft/cometbft/libs/tempfile"
+	cmtlight "github.com/cometbft/cometbft/light"
 	cmtfile "github.com/cometbft/cometbft/privval"
-	"github.com/cometbft/cometbft/state"
 	cmtstate "github.com/cometbft/cometbft/state"
+	cmtstatesync "github.com/cometbft/cometbft/statesync"
 	cmtstore "github.com/cometbft/cometbft/store"
 )
 
@@ -140,6 +142,8 @@ type FastStartOptions struct {
 	OverwriteFastStartMode bool
 	BackendType            string
 	DiscardABCIResponses   bool
+	RpcServers             []string
+	TrustOpts              cmtlight.TrustOptions
 }
 
 func (opts Options) Validate() error {
@@ -272,7 +276,7 @@ func Load(dir string, opts Options) (*DB, error) {
 
 		// rollback cometbft state.db and blockstore.db to the startup height
 		dataDir := filepath.Dir(dir)
-		if err := RollBackStateAndBlockStore(dataDir, opts.FastStartOpts.BackendType, opts.FastStartOpts.DiscardABCIResponses, targetHeight, opts.Logger); err != nil {
+		if err := RollBackStateAndBlockStore(dataDir, opts.FastStartOpts.BackendType, opts.FastStartOpts.DiscardABCIResponses, targetHeight, opts); err != nil {
 			return nil, fmt.Errorf("failed to rollback CometBFT state and block store: %w", err)
 		}
 		opts.Logger.Info("rolled back state and blockstore with FastStartMode", "height", targetHeight)
@@ -386,7 +390,7 @@ func Load(dir string, opts Options) (*DB, error) {
 
 // RollBackStateAndBlockStore rollback state.db and blockstore.db to target height
 // only called with fastStartMode
-func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIResponses bool, target int64, logger Logger) error {
+func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIResponses bool, target int64, opts Options) error {
 	if !cmtos.FileExists(filepath.Join(dbDir, "blockstore.db")) {
 		if target == 0 {
 			return nil
@@ -410,7 +414,7 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 	if err != nil {
 		return err
 	}
-	stateStore := cmtstate.NewStore(stateDB, state.StoreOptions{
+	stateStore := cmtstate.NewStore(stateDB, cmtstate.StoreOptions{
 		DiscardABCIResponses: discardABCIResponses,
 	})
 
@@ -421,7 +425,7 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 
 	// rollback state and block store only if target is less than current height
 	if blockStore.Height() <= target {
-		logger.Info("do not have to rollback, because the blockstore's height is not larger than the target", "blockStoreHeight", blockStore.Height(), "target", target)
+		opts.Logger.Info("do not have to rollback, because the blockstore's height is not larger than the target", "blockStoreHeight", blockStore.Height(), "target", target)
 		return nil
 	}
 
@@ -432,7 +436,7 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 			// target equals to 0 or statesync snapshot height
 			// can not rollback blockstore to these height, so remove state.db and blockstore.db
 			if err = os.RemoveAll(filepath.Join(dbDir, "blockstore.db")); err != nil {
-				logger.Warn("remove blockstore.db failed", "err", err)
+				opts.Logger.Warn("remove blockstore.db failed", "err", err)
 			}
 			if target == 0 {
 				// Remove state.db only if target is 0.
@@ -441,7 +445,44 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 				// State will be rebuilded after restoring this snapshot,
 				// do not remove it.
 				if err = os.RemoveAll(filepath.Join(dbDir, "state.db")); err != nil {
-					logger.Warn("remove state.db failed", "err", err)
+					opts.Logger.Warn("remove state.db failed", "err", err)
+				}
+			} else {
+				// Do not remove state.db but recover it.
+				// Blockstore can not find the block at non-zero target height,
+				// means the target is the height of snapshot which is synced from other peers.
+				// Rollback state to snapshot height, recover it to which is created when snapshot is restored.
+				currentState, err := stateStore.Load()
+				if err != nil {
+					return err
+				}
+				if currentState.IsEmpty() {
+					return errors.New("no state found")
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+
+				// new state provider for fetching light block at snapshot height
+				stateProvider, err := cmtstatesync.NewLightClientStateProvider(
+					ctx,
+					currentState.ChainID, currentState.Version, currentState.InitialHeight,
+					opts.FastStartOpts.RpcServers, opts.FastStartOpts.TrustOpts, cmtlog.NewNopLogger())
+				if err != nil {
+					return fmt.Errorf("failed to set up light client state provider for rollback: %w", err)
+				}
+
+				// get snapshot height state
+				pctx, pcancel := context.WithTimeout(context.TODO(), 30*time.Second)
+				defer pcancel()
+				targetState, err := stateProvider.State(pctx, uint64(target))
+				if err != nil {
+					return fmt.Errorf("fetch state for rollback failed, height: %d, err: %w", target, err)
+				}
+
+				// save state at snapshot height
+				if err := stateStore.Save(targetState); err != nil {
+					return fmt.Errorf("save state for rollback failed, height: %d, err: %w", target, err)
 				}
 			}
 
@@ -449,7 +490,7 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 		}
 		return fmt.Errorf("state and block store rollback failed, target: %d, err: %w", target, err)
 	}
-	logger.Info("rollback state and block store finished", "height", height, "apphash", hex.EncodeToString(hash))
+	opts.Logger.Info("rollback state and block store finished", "height", height, "apphash", hex.EncodeToString(hash))
 	return nil
 }
 
