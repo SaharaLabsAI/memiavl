@@ -432,64 +432,93 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 	// rollback state and block store
 	height, hash, err := cmtstate.RollbackTo(blockStore, stateStore, target)
 	if err != nil {
-		if errors.Is(err, cmtstate.ErrTargetHeightNotFound) {
-			// target equals to 0 or statesync snapshot height
-			// can not rollback blockstore to these height, so remove state.db and blockstore.db
+		if !errors.Is(err, cmtstate.ErrTargetHeightNotFound) {
+			return fmt.Errorf("state and block store rollback failed, target: %d, err: %w", target, err)
+		}
+
+		// target equals to 0 or statesync snapshot height
+		// can not get metadata from blockstore at these height
+		if target == 0 {
+			// Remove state.db only if target is 0.
+			// If target > 0 && blockstore can not find the target block,
+			// it means rollback to snapshot height synced from other peer.
+			// State will be rebuilded after restoring this snapshot,
+			// do not remove it.
+			if err = os.RemoveAll(filepath.Join(dbDir, "state.db")); err != nil {
+				opts.Logger.Warn("remove state.db failed", "err", err)
+			}
+
 			if err = os.RemoveAll(filepath.Join(dbDir, "blockstore.db")); err != nil {
 				opts.Logger.Warn("remove blockstore.db failed", "err", err)
 			}
-			if target == 0 {
-				// Remove state.db only if target is 0.
-				// If target > 0 && blockstore can not find the target block,
-				// it means rollback to snapshot height synced from other peer.
-				// State will be rebuilded after restoring this snapshot,
-				// do not remove it.
-				if err = os.RemoveAll(filepath.Join(dbDir, "state.db")); err != nil {
-					opts.Logger.Warn("remove state.db failed", "err", err)
-				}
-			} else {
-				// Do not remove state.db but recover it.
-				// Blockstore can not find the block at non-zero target height,
-				// means the target is the height of snapshot which is synced from other peers.
-				// Rollback state to snapshot height, recover it to which is created when snapshot is restored.
-				currentState, err := stateStore.Load()
-				if err != nil {
-					return err
-				}
-				if currentState.IsEmpty() {
-					return errors.New("no state found")
-				}
+		} else {
+			// Do not remove state.db but recover it.
+			// Blockstore can not find the block at non-zero target height,
+			// means the target is the height of snapshot which is synced from other peers.
+			// Rollback state to snapshot height, recover it to which is created when snapshot is restored.
+			currentState, err := stateStore.Load()
+			if err != nil {
+				return err
+			}
+			if currentState.IsEmpty() {
+				return errors.New("no state found")
+			}
 
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
 
-				// new state provider for fetching light block at snapshot height
-				stateProvider, err := cmtstatesync.NewLightClientStateProvider(
-					ctx,
-					currentState.ChainID, currentState.Version, currentState.InitialHeight,
-					opts.FastStartOpts.RpcServers, opts.FastStartOpts.TrustOpts, cmtlog.NewNopLogger())
-				if err != nil {
-					return fmt.Errorf("failed to set up light client state provider for rollback: %w", err)
-				}
+			// new state provider for fetching light block at snapshot height
+			stateProvider, err := cmtstatesync.NewLightClientStateProvider(
+				ctx,
+				currentState.ChainID, currentState.Version, currentState.InitialHeight,
+				opts.FastStartOpts.RpcServers, opts.FastStartOpts.TrustOpts, cmtlog.NewNopLogger())
+			if err != nil {
+				return fmt.Errorf("failed to set up light client state provider for rollback: %w", err)
+			}
 
-				// get snapshot height state
-				pctx, pcancel := context.WithTimeout(context.TODO(), 30*time.Second)
-				defer pcancel()
-				targetState, err := stateProvider.State(pctx, uint64(target))
-				if err != nil {
-					return fmt.Errorf("fetch state for rollback failed, height: %d, err: %w", target, err)
-				}
+			// get snapshot height state
+			pctx, pcancel := context.WithTimeout(context.TODO(), 30*time.Second)
+			defer pcancel()
+			targetState, err := stateProvider.State(pctx, uint64(target))
+			if err != nil {
+				return fmt.Errorf("fetch state for rollback failed, height: %d, err: %w", target, err)
+			}
 
-				// save state at snapshot height
-				if err := stateStore.Save(targetState); err != nil {
-					return fmt.Errorf("save state for rollback failed, height: %d, err: %w", target, err)
+			// save state at snapshot height
+			if err := stateStore.Save(targetState); err != nil {
+				return fmt.Errorf("save state for rollback failed, height: %d, err: %w", target, err)
+			}
+
+			// rollback blockstore
+			for blockStore.Height() > target {
+				if err := blockStore.DeleteLatestBlock(); err != nil {
+					return fmt.Errorf("failed to remove final block from blockstore: %w, targetHeight: %d", err, target)
 				}
 			}
 
-			return nil
+			hash = targetState.AppHash
+
+			//
+			targetCommit, err := stateProvider.Commit(pctx, uint64(target))
+			if err != nil {
+				opts.Logger.Info("failed to fetch and verify commit", "err", err)
+
+				return err
+			}
+
+			err = stateStore.Bootstrap(targetState)
+			if err != nil {
+				opts.Logger.Error("Failed to bootstrap node with new state", "err", err)
+				return err
+			}
+			err = blockStore.SaveSeenCommit(targetState.LastBlockHeight, targetCommit)
+			if err != nil {
+				opts.Logger.Error("Failed to store last seen commit", "err", err)
+				return err
+			}
 		}
-		return fmt.Errorf("state and block store rollback failed, target: %d, err: %w", target, err)
 	}
+
 	opts.Logger.Info("rollback state and block store finished", "height", height, "apphash", hex.EncodeToString(hash))
 	return nil
 }
