@@ -456,7 +456,9 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 			// Do not remove state.db but recover it.
 			// Blockstore can not find the block at non-zero target height,
 			// means the target is the height of snapshot which is synced from other peers.
-			// Rollback state to snapshot height, recover it to which is created when snapshot is restored.
+			// Rollback state and blockstore to snapshot height.
+
+			// 1. restore state.db
 			currentState, err := stateStore.Load()
 			if err != nil {
 				return err
@@ -489,7 +491,6 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 			if err := stateStore.Save(targetState); err != nil {
 				return fmt.Errorf("save state for rollback failed, height: %d, err: %w", target, err)
 			}
-
 			hash = targetState.AppHash
 
 			targetCommit, err := stateProvider.Commit(pctx, uint64(target))
@@ -509,8 +510,9 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 			if err != nil {
 				return fmt.Errorf("failed to set synced height: %w", err)
 			}
+			opts.Logger.Info("restored state.db to snapshot height")
 
-			// rollback blockstore and save
+			// 2. rollback blockstore and save
 			for blockStore.Height() > target {
 				if err := blockStore.DeleteLatestBlock(); err != nil {
 					return fmt.Errorf("failed to remove final block from blockstore: %w, targetHeight: %d", err, target)
@@ -523,8 +525,8 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 				return err
 			}
 
-			cmtstore.SaveBlockStoreState(&tmstore.BlockStoreState{Base: blockStore.Base(), Height: blockStore.Height()}, blockStoreDB)
-
+			cmtstore.SaveBlockStoreState(&tmstore.BlockStoreState{Base: blockStore.Height(), Height: blockStore.Height()}, blockStoreDB)
+			opts.Logger.Info("restored blockstore.db to snapshot height")
 		}
 
 	}
