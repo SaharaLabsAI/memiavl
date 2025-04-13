@@ -23,6 +23,7 @@ import (
 	"github.com/cometbft/cometbft/libs/tempfile"
 	cmtlight "github.com/cometbft/cometbft/light"
 	cmtfile "github.com/cometbft/cometbft/privval"
+	tmstore "github.com/cometbft/cometbft/proto/tendermint/store"
 	cmtstate "github.com/cometbft/cometbft/state"
 	cmtstatesync "github.com/cometbft/cometbft/statesync"
 	cmtstore "github.com/cometbft/cometbft/store"
@@ -489,16 +490,8 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 				return fmt.Errorf("save state for rollback failed, height: %d, err: %w", target, err)
 			}
 
-			// rollback blockstore
-			for blockStore.Height() > target {
-				if err := blockStore.DeleteLatestBlock(); err != nil {
-					return fmt.Errorf("failed to remove final block from blockstore: %w, targetHeight: %d", err, target)
-				}
-			}
-
 			hash = targetState.AppHash
 
-			//
 			targetCommit, err := stateProvider.Commit(pctx, uint64(target))
 			if err != nil {
 				opts.Logger.Info("failed to fetch and verify commit", "err", err)
@@ -511,17 +504,29 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 				opts.Logger.Error("Failed to bootstrap node with new state", "err", err)
 				return err
 			}
+
+			err = stateStore.SetOfflineStateSyncHeight(targetState.LastBlockHeight)
+			if err != nil {
+				return fmt.Errorf("failed to set synced height: %w", err)
+			}
+
+			// rollback blockstore and save
+			for blockStore.Height() > target {
+				if err := blockStore.DeleteLatestBlock(); err != nil {
+					return fmt.Errorf("failed to remove final block from blockstore: %w, targetHeight: %d", err, target)
+				}
+			}
+
 			err = blockStore.SaveSeenCommit(targetState.LastBlockHeight, targetCommit)
 			if err != nil {
 				opts.Logger.Error("Failed to store last seen commit", "err", err)
 				return err
 			}
 
-			err = stateStore.SetOfflineStateSyncHeight(targetState.LastBlockHeight)
-			if err != nil {
-				return fmt.Errorf("failed to set synced height: %w", err)
-			}
+			cmtstore.SaveBlockStoreState(&tmstore.BlockStoreState{Base: blockStore.Base(), Height: blockStore.Height()}, blockStoreDB)
+
 		}
+
 	}
 
 	opts.Logger.Info("rollback state and block store finished", "height", height, "apphash", hex.EncodeToString(hash))
