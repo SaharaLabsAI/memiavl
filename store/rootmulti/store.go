@@ -310,8 +310,7 @@ func (rs *Store) GetCommitKVStore(key types.StoreKey) types.CommitKVStore {
 // Implements interface CommitMultiStore
 // used by normal node startup.
 func (rs *Store) LoadLatestVersion() error {
-	rs.opts.FastStartOpts.FastStartMode = true
-	if rs.opts.FastStartOpts.OverwriteFastStartMode {
+	if rs.opts.FastStartOpts.FastStartMode && rs.opts.FastStartOpts.OverwriteFastStartMode {
 		rs.opts.FastStartOpts.FastStartMode = false
 	}
 	return rs.LoadVersionAndUpgrade(0, nil)
@@ -319,6 +318,7 @@ func (rs *Store) LoadLatestVersion() error {
 
 // Implements interface CommitMultiStore
 func (rs *Store) LoadLatestVersionAndUpgrade(upgrades *types.StoreUpgrades) error {
+	rs.opts.FastStartOpts.FastStartMode = false
 	return rs.LoadVersionAndUpgrade(0, upgrades)
 }
 

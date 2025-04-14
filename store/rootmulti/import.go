@@ -24,13 +24,13 @@ func (rs *Store) Restore(
 		rs.db = nil
 	}
 
-	item, err := rs.restore(height, format, protoReader) //
+	item, err := rs.restore(height, format, protoReader)
 	if err != nil {
 		return types.SnapshotItem{}, err
 	}
 
 	rs.opts.FastStartOpts.OverwriteFastStartMode = true
-	return item, rs.LoadLatestVersion() //
+	return item, rs.LoadLatestVersion()
 }
 
 func (rs *Store) restore(

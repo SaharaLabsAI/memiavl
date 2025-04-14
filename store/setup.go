@@ -25,7 +25,6 @@ const (
 	FlagMaxCatchupTimes     = "memiavl.max-catchup-times"
 	FlagWalLagThreshold     = "memiavl.wal-lag-threshold"
 	FlagSnapshotWriterLimit = "memiavl.snapshot-writer-limit"
-	FlagFastStartMode       = "memiavl.fast-start-mode"
 )
 
 // SetupMemIAVL insert the memiavl setter in front of baseapp options, so that
