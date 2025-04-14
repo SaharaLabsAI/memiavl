@@ -34,6 +34,7 @@ const (
 	DefaultMaxCatchupTimes     = 5
 	DefaultWalLagThreshold     = 10
 	DefaultWalReaders          = 20
+	DefaultFastStartMode       = false
 	LockFileName               = "LOCK"
 	DefaultSnapshotWriterLimit = 4
 	TmpSuffix                  = "-tmp"

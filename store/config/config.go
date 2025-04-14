@@ -29,7 +29,10 @@ type MemIAVLConfig struct {
 	// WalLagThreshold determine whether to proceed with the next round of catchupWAL,
 	// pass to main thread if less than WalLagThreshold.
 	WalLagThreshold uint64 `mapstructure:"wal-lag-threshold"`
-
+	// FastStartMode determine whether startup node with fast mode, default false.
+	// Node will rollback to the snapshot height and sync blocks from other peers.
+	// Please note that if no other nodes can provide the rolled-back blocks,
+	// the data for those blocks will be lost permanently.
 	FastStartMode bool `mapstructure:"fast-start-mode"`
 }
 
@@ -41,6 +44,6 @@ func DefaultMemIAVLConfig() MemIAVLConfig {
 		WalReaders:         memiavl.DefaultWalReaders,
 		MaxCatchupTimes:    memiavl.DefaultMaxCatchupTimes,
 		WalLagThreshold:    memiavl.DefaultWalLagThreshold,
-		FastStartMode:      false,
+		FastStartMode:      memiavl.DefaultFastStartMode,
 	}
 }

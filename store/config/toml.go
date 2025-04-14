@@ -42,4 +42,10 @@ max-catchup-times = {{ .MemIAVL.MaxCatchupTimes }}
 # default to 10, 
 # equals to set max-catchup-times=1 if set wal-lag-threshold a large number such as the MaxUint64(18446744073709551615)
 wal-lag-threshold = {{ .MemIAVL.WalLagThreshold }}
+
+# FastStartMode determine whether startup node with fast mode, default false.
+# Node will rollback to the snapshot height and sync blocks from other peers.
+# Please note that if no other nodes can provide the rolled-back blocks, 
+# the data for those blocks will be lost permanently.
+fast-start-mode = {{ .MemIAVL.FastStartMode }}
 `
