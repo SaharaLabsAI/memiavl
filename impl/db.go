@@ -144,6 +144,7 @@ type FastStartOptions struct {
 	OverwriteFastStartMode bool
 	BackendType            string
 	DiscardABCIResponses   bool
+	VersiondbEnable        bool
 	RpcServers             []string
 	TrustOpts              cmtlight.TrustOptions
 }
@@ -244,7 +245,7 @@ func Load(dir string, opts Options) (*DB, error) {
 		targetHeight := mtree.Version()
 		opts.Logger.Info("load with FastStartMode", "targetHeight", targetHeight)
 
-		// truncate WALs to snapshot height
+		// 1. truncate WALs to snapshot height
 		startupIndex := walIndex(mtree.Version(), mtree.initialVersion)
 		walLastIndex, err := wal.LastIndex()
 		if err != nil {
@@ -276,14 +277,14 @@ func Load(dir string, opts Options) (*DB, error) {
 		}
 		opts.Logger.Info("Truncated WALs with FastStartMode", "height", targetHeight)
 
-		// rollback cometbft state.db and blockstore.db to the startup height
+		// 2. rollback cometbft state.db and blockstore.db to the startup height
 		dataDir := filepath.Dir(dir)
 		if err := RollBackStateAndBlockStore(dataDir, opts.FastStartOpts.BackendType, opts.FastStartOpts.DiscardABCIResponses, targetHeight, opts); err != nil {
 			return nil, fmt.Errorf("failed to rollback CometBFT state and block store: %w", err)
 		}
 		opts.Logger.Info("rolled back state and blockstore with FastStartMode", "height", targetHeight)
 
-		// clear priv_validator_state.json
+		// 3. clear priv_validator_state.json
 		stateFilePath := filepath.Join(dataDir, "priv_validator_state.json")
 		pvState := cmtfile.FilePVLastSignState{}
 		stateJSONBytes, err := os.ReadFile(stateFilePath)
@@ -312,6 +313,15 @@ func Load(dir string, opts Options) (*DB, error) {
 
 			opts.Logger.Info("clear priv_validator_state.json with FastStartMode", "height", targetHeight)
 		}
+
+		// 4. remove versiondb
+		if opts.FastStartOpts.VersiondbEnable {
+			if err = os.RemoveAll(filepath.Join(dataDir, "versiondb")); err != nil {
+				return nil, fmt.Errorf("remove versiondb failed: %w", err)
+			}
+		}
+		opts.Logger.Info("removed versiondb with FastStartMode")
+
 	} else if opts.TargetVersion == 0 || int64(opts.TargetVersion) > mtree.Version() {
 		if err := mtree.CatchupWAL(wal, int64(opts.TargetVersion), opts.Logger); err != nil {
 			return nil, errors.Join(err, wal.Close())
@@ -447,11 +457,11 @@ func RollBackStateAndBlockStore(dbDir string, backendType string, discardABCIRes
 			// State will be rebuilded after restoring this snapshot,
 			// do not remove it.
 			if err = os.RemoveAll(filepath.Join(dbDir, "state.db")); err != nil {
-				opts.Logger.Warn("remove state.db failed", "err", err)
+				return fmt.Errorf("remove state.db failed: %w", err)
 			}
 
 			if err = os.RemoveAll(filepath.Join(dbDir, "blockstore.db")); err != nil {
-				opts.Logger.Warn("remove blockstore.db failed", "err", err)
+				return fmt.Errorf("remove blockstore.db failed: %w", err)
 			}
 		} else {
 			// Do not remove state.db but recover it.
