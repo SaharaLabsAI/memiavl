@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 const (
@@ -357,7 +358,8 @@ func (t *Tree) WriteSnapshotWithContext(ctx context.Context, snapshotDir string)
 		if t.root == nil {
 			return 0, nil
 		} else {
-			if err := w.writeRecursive(t.root); err != nil {
+			if err := w.writeIterative(t.root); err != nil {
+				// if err := w.writeRecursive(t.root); err != nil {
 				return 0, err
 			}
 			return w.leafCounter, nil
@@ -578,6 +580,134 @@ func (w *snapshotWriter) writeRecursive(node Node) error {
 	}
 
 	return w.writeBranch(node.Version(), uint32(node.Size()), node.Height(), preTrees, keyLeaf, node.Hash())
+}
+
+// func (w *snapshotWriter) writeIterative(root Node) error {
+// 	type stackItem struct {
+// 		node    Node
+// 		visited bool
+// 	}
+//
+// 	var stack []stackItem
+// 	stack = append(stack, stackItem{node: root})
+//
+// 	for len(stack) > 0 {
+// 		top := stack[len(stack)-1]
+//
+// 		if top.node.IsLeaf() {
+// 			stack = stack[:len(stack)-1] // pop
+// 			if err := w.writeLeaf(top.node.Version(), top.node.Key(), top.node.Value(), top.node.Hash()); err != nil {
+// 				return fmt.Errorf("writeIterative: failed to write leaf: %w", err)
+// 			}
+// 			continue
+// 		}
+//
+// 		if top.visited {
+// 			// process non-leaf node
+// 			stack = stack[:len(stack)-1] // pop
+//
+// 			preTrees := uint8(w.leafCounter - w.branchCounter)
+// 			keyLeaf := w.leafCounter
+//
+// 			version := top.node.Version()
+// 			size := uint32(top.node.Size())
+// 			height := top.node.Height()
+// 			hash := top.node.Hash()
+//
+// 			if err := w.writeBranch(version, size, height, preTrees, keyLeaf, hash); err != nil {
+// 				return fmt.Errorf("writeIterative: failed to write branch: %w", err)
+// 			}
+// 			continue
+// 		}
+//
+// 		// mark this node visited, and pop right-child & left-child
+// 		stack[len(stack)-1].visited = true
+// 		stack = append(stack, stackItem{node: top.node.Right()})
+// 		stack = append(stack, stackItem{node: top.node.Left()})
+// 	}
+//
+// 	return nil
+// }
+
+type stackItem struct {
+	node    Node
+	visited bool
+}
+
+var stackItemPool = sync.Pool{
+	New: func() interface{} {
+		return &stackItem{}
+	},
+}
+
+const defaultStackSize = 1024
+
+func (w *snapshotWriter) writeIterative(root Node) error {
+	if root == nil {
+		return nil
+	}
+
+	stack := make([]*stackItem, 0, defaultStackSize)
+	item := stackItemPool.Get().(*stackItem)
+	item.node = root
+	item.visited = false
+	stack = append(stack, item)
+
+	for len(stack) > 0 {
+		select {
+		case <-w.ctx.Done():
+			return w.ctx.Err()
+		default:
+		}
+
+		top := stack[len(stack)-1]
+
+		if top.node.IsLeaf() {
+			stack = stack[:len(stack)-1] // pop
+			if err := w.writeLeaf(top.node.Version(), top.node.Key(), top.node.Value(), top.node.Hash()); err != nil {
+				return fmt.Errorf("writeIterative: failed to write leaf node at height %d: %w",
+					top.node.Height(), err)
+			}
+			stackItemPool.Put(top)
+			continue
+		}
+
+		if top.visited {
+			stack = stack[:len(stack)-1] // pop
+
+			preTrees := uint8(w.leafCounter - w.branchCounter)
+			keyLeaf := w.leafCounter
+
+			version := top.node.Version()
+			size := uint32(top.node.Size())
+			height := top.node.Height()
+			hash := top.node.Hash()
+
+			if err := w.writeBranch(version, size, height, preTrees, keyLeaf, hash); err != nil {
+				return fmt.Errorf("writeIterative: failed to write branch node at height %d: %w",
+					height, err)
+			}
+			stackItemPool.Put(top)
+			continue
+		}
+
+		top.visited = true
+
+		if right := top.node.Right(); right != nil {
+			item := stackItemPool.Get().(*stackItem)
+			item.node = right
+			item.visited = false
+			stack = append(stack, item)
+		}
+		if left := top.node.Left(); left != nil {
+			item := stackItemPool.Get().(*stackItem)
+			item.node = left
+			item.visited = false
+			stack = append(stack, item)
+		}
+	}
+
+	return nil
 }
 
 func createFile(name string) (*os.File, error) {
