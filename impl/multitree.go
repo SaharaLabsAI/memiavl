@@ -588,6 +588,25 @@ func WriteFileSync(name string, data []byte) error {
 	return err
 }
 
+// func WriteFileSync(name string, data []byte) error {
+// 	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.ModePerm)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	defer f.Close()
+
+// 	writer := bufio.NewWriter(f)
+// 	_, err = writer.Write(data)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	err = writer.Flush()
+// 	if err != nil {
+// 		return err
+// 	}
+// 	return f.Sync()
+// }
+
 func (t *MultiTree) Close() error {
 	errs := make([]error, 0, len(t.trees))
 	for _, entry := range t.trees {

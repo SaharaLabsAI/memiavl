@@ -630,8 +630,10 @@ func (w *snapshotWriter) writeRecursive(node Node) error {
 // }
 
 type stackItem struct {
-	node    Node
-	visited bool
+	node     Node
+	visited  bool
+	preTrees uint8
+	isLeft   bool
 }
 
 var stackItemPool = sync.Pool{
@@ -647,12 +649,15 @@ func (w *snapshotWriter) writeIterative(root Node) error {
 		return nil
 	}
 
+	// github.com/golang-collections/collections/stack
 	stack := make([]*stackItem, 0, defaultStackSize)
 	item := stackItemPool.Get().(*stackItem)
 	item.node = root
 	item.visited = false
+	// item.preTrees = uint8(w.leafCounter - w.branchCounter)
 	stack = append(stack, item)
 
+	var keyLeaf uint32
 	for len(stack) > 0 {
 		select {
 		case <-w.ctx.Done():
@@ -668,6 +673,11 @@ func (w *snapshotWriter) writeIterative(root Node) error {
 				return fmt.Errorf("writeIterative: failed to write leaf node at height %d: %w",
 					top.node.Height(), err)
 			}
+
+			if top.isLeft {
+				keyLeaf = w.leafCounter
+			}
+
 			stackItemPool.Put(top)
 			continue
 		}
@@ -675,23 +685,26 @@ func (w *snapshotWriter) writeIterative(root Node) error {
 		if top.visited {
 			stack = stack[:len(stack)-1] // pop
 
-			preTrees := uint8(w.leafCounter - w.branchCounter)
-			keyLeaf := w.leafCounter
-
 			version := top.node.Version()
 			size := uint32(top.node.Size())
 			height := top.node.Height()
 			hash := top.node.Hash()
 
-			if err := w.writeBranch(version, size, height, preTrees, keyLeaf, hash); err != nil {
+			if err := w.writeBranch(version, size, height, top.preTrees, keyLeaf, hash); err != nil {
 				return fmt.Errorf("writeIterative: failed to write branch node at height %d: %w",
 					height, err)
 			}
+
+			if top.isLeft {
+				keyLeaf = w.leafCounter
+			}
+
 			stackItemPool.Put(top)
 			continue
 		}
 
 		top.visited = true
+		top.preTrees = uint8(w.leafCounter - w.branchCounter)
 
 		if right := top.node.Right(); right != nil {
 			item := stackItemPool.Get().(*stackItem)
@@ -703,6 +716,7 @@ func (w *snapshotWriter) writeIterative(root Node) error {
 			item := stackItemPool.Get().(*stackItem)
 			item.node = left
 			item.visited = false
+			item.isLeft = true
 			stack = append(stack, item)
 		}
 	}

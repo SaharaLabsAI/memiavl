@@ -87,7 +87,7 @@ func (node PersistedNode) Key() []byte {
 	if node.isLeaf {
 		return node.snapshot.LeafKey(node.index)
 	}
-	index := node.branchNode().KeyLeaf()
+	index := node.branchNode().KeyLeaf() //
 	return node.snapshot.LeafKey(index)
 }
 
