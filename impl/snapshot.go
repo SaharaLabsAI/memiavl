@@ -360,10 +360,21 @@ func (t *Tree) WriteSnapshotWithContext(ctx context.Context, snapshotDir string)
 			if err := w.writeRecursive(t.root); err != nil {
 				return 0, err
 			}
+
+			if err := w.writeAllBatches(); err != nil {
+				return 0, err
+			}
+
 			return w.leafCounter, nil
 		}
 	})
 }
+
+var (
+	kvsBatchSize    = 1024 * 1024
+	leavesBatchSize = 48 * 20 * 1024 // 48 is the leaf node size
+	nodesBatchSize  = 48 * 20 * 1024 // 48 is the branch node size
+)
 
 func writeSnapshot(
 	ctx context.Context,
@@ -408,9 +419,9 @@ func writeSnapshot(
 		}
 	}()
 
-	nodesWriter := bufio.NewWriter(fpNodes)
-	leavesWriter := bufio.NewWriter(fpLeaves)
-	kvsWriter := bufio.NewWriter(fpKVs)
+	nodesWriter := bufio.NewWriterSize(fpNodes, nodesBatchSize)
+	leavesWriter := bufio.NewWriterSize(fpLeaves, leavesBatchSize)
+	kvsWriter := bufio.NewWriterSize(fpKVs, kvsBatchSize)
 
 	w := newSnapshotWriter(ctx, nodesWriter, leavesWriter, kvsWriter)
 	leaves, err := doWrite(w)
@@ -475,6 +486,10 @@ type snapshotWriter struct {
 
 	// record the current writing offset in kvs file
 	kvsOffset uint64
+
+	kvsBatchBuf    []byte
+	leavesBatchBuf []byte
+	nodesBatchBuf  []byte
 }
 
 func newSnapshotWriter(ctx context.Context, nodesWriter, leavesWriter, kvsWriter io.Writer) *snapshotWriter {
@@ -483,6 +498,10 @@ func newSnapshotWriter(ctx context.Context, nodesWriter, leavesWriter, kvsWriter
 		nodesWriter:  nodesWriter,
 		leavesWriter: leavesWriter,
 		kvWriter:     kvsWriter,
+
+		kvsBatchBuf:    make([]byte, 0, kvsBatchSize),
+		leavesBatchBuf: make([]byte, 0, leavesBatchSize),
+		nodesBatchBuf:  make([]byte, 0, nodesBatchSize),
 	}
 }
 
@@ -491,22 +510,20 @@ func (w *snapshotWriter) writeKeyValue(key, value []byte) error {
 	var numBuf [4]byte
 
 	binary.LittleEndian.PutUint32(numBuf[:], uint32(len(key)))
-	if _, err := w.kvWriter.Write(numBuf[:]); err != nil {
-		return err
-	}
-	if _, err := w.kvWriter.Write(key); err != nil {
-		return err
-	}
+	w.kvsBatchBuf = append(w.kvsBatchBuf, numBuf[:]...)
+	w.kvsBatchBuf = append(w.kvsBatchBuf, key...)
 
 	binary.LittleEndian.PutUint32(numBuf[:], uint32(len(value)))
-	if _, err := w.kvWriter.Write(numBuf[:]); err != nil {
-		return err
-	}
-	if _, err := w.kvWriter.Write(value); err != nil {
-		return err
-	}
+	w.kvsBatchBuf = append(w.kvsBatchBuf, numBuf[:]...)
+	w.kvsBatchBuf = append(w.kvsBatchBuf, value...)
 
 	w.kvsOffset += 4 + 4 + uint64(len(key)) + uint64(len(value))
+
+	if len(w.kvsBatchBuf) >= kvsBatchSize {
+		if err := w.writeKVsBatch(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -528,11 +545,13 @@ func (w *snapshotWriter) writeLeaf(version uint32, key, value, hash []byte) erro
 		return err
 	}
 
-	if _, err := w.leavesWriter.Write(buf[:]); err != nil {
-		return err
-	}
-	if _, err := w.leavesWriter.Write(hash); err != nil {
-		return err
+	w.leavesBatchBuf = append(w.leavesBatchBuf, buf[:]...)
+	w.leavesBatchBuf = append(w.leavesBatchBuf, hash...)
+
+	if len(w.leavesBatchBuf) >= leavesBatchSize {
+		if err := w.writeLeavesBatch(); err != nil {
+			return err
+		}
 	}
 
 	w.leafCounter++
@@ -547,14 +566,62 @@ func (w *snapshotWriter) writeBranch(version, size uint32, height, preTrees uint
 	binary.LittleEndian.PutUint32(buf[OffsetSize:], size)
 	binary.LittleEndian.PutUint32(buf[OffsetKeyLeaf:], keyLeaf)
 
-	if _, err := w.nodesWriter.Write(buf[:]); err != nil {
-		return err
-	}
-	if _, err := w.nodesWriter.Write(hash); err != nil {
-		return err
+	w.nodesBatchBuf = append(w.nodesBatchBuf, buf[:]...)
+	w.nodesBatchBuf = append(w.nodesBatchBuf, hash...)
+
+	if len(w.nodesBatchBuf) >= nodesBatchSize {
+		if err := w.writeNodesBatch(); err != nil {
+			return err
+		}
 	}
 
 	w.branchCounter++
+	return nil
+}
+
+func (w *snapshotWriter) writeKVsBatch() error {
+	if len(w.kvsBatchBuf) == 0 {
+		return nil
+	}
+	if _, err := w.kvWriter.Write(w.kvsBatchBuf); err != nil {
+		return err
+	}
+	w.kvsBatchBuf = w.kvsBatchBuf[:0]
+	return nil
+}
+
+func (w *snapshotWriter) writeLeavesBatch() error {
+	if len(w.leavesBatchBuf) == 0 {
+		return nil
+	}
+	if _, err := w.leavesWriter.Write(w.leavesBatchBuf); err != nil {
+		return err
+	}
+	w.leavesBatchBuf = w.leavesBatchBuf[:0]
+	return nil
+}
+
+func (w *snapshotWriter) writeNodesBatch() error {
+	if len(w.nodesBatchBuf) == 0 {
+		return nil
+	}
+	if _, err := w.nodesWriter.Write(w.nodesBatchBuf); err != nil {
+		return err
+	}
+	w.nodesBatchBuf = w.nodesBatchBuf[:0]
+	return nil
+}
+
+func (w *snapshotWriter) writeAllBatches() error {
+	if err := w.writeKVsBatch(); err != nil {
+		return err
+	}
+	if err := w.writeLeavesBatch(); err != nil {
+		return err
+	}
+	if err := w.writeNodesBatch(); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -144,6 +144,9 @@ func doImport(dir string, version int64, nodes <-chan *ExportNode) (returnErr er
 				return 0, err
 			}
 		}
+		if err := i.writeAllBatches(); err != nil {
+			return 0, err
+		}
 
 		switch len(i.leavesStack) {
 		case 0:
