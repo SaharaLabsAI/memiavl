@@ -680,6 +680,8 @@ func (w *snapshotWriter) writeIterative(root Node) error {
 				// keyLeaf = w.leafCounter
 			}
 
+			// reset item before put back to pool
+			top.visited, top.preTrees, top.isLeft, top.keyLeaf = false, 0, false, 0
 			stackItemPool.Put(top)
 			continue
 		}
@@ -703,6 +705,8 @@ func (w *snapshotWriter) writeIterative(root Node) error {
 				// keyLeaf = w.leafCounter
 			}
 
+			// reset item before put back to pool
+			top.visited, top.preTrees, top.isLeft, top.keyLeaf = false, 0, false, 0
 			stackItemPool.Put(top)
 			continue
 		}
