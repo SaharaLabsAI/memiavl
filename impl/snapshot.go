@@ -634,6 +634,7 @@ type stackItem struct {
 	visited  bool
 	preTrees uint8
 	isLeft   bool
+	keyLeaf  uint32
 }
 
 var stackItemPool = sync.Pool{
@@ -657,7 +658,7 @@ func (w *snapshotWriter) writeIterative(root Node) error {
 	// item.preTrees = uint8(w.leafCounter - w.branchCounter)
 	stack = append(stack, item)
 
-	var keyLeaf uint32
+	// var keyLeaf uint32
 	for len(stack) > 0 {
 		select {
 		case <-w.ctx.Done():
@@ -675,14 +676,15 @@ func (w *snapshotWriter) writeIterative(root Node) error {
 			}
 
 			if top.isLeft {
-				keyLeaf = w.leafCounter
+				stack[len(stack)-2].keyLeaf = w.leafCounter
+				// keyLeaf = w.leafCounter
 			}
 
 			stackItemPool.Put(top)
 			continue
 		}
 
-		if top.visited {
+		if top.visited { // is branch
 			stack = stack[:len(stack)-1] // pop
 
 			version := top.node.Version()
@@ -690,13 +692,15 @@ func (w *snapshotWriter) writeIterative(root Node) error {
 			height := top.node.Height()
 			hash := top.node.Hash()
 
-			if err := w.writeBranch(version, size, height, top.preTrees, keyLeaf, hash); err != nil {
+			if err := w.writeBranch(version, size, height, top.preTrees, top.keyLeaf, hash); err != nil {
 				return fmt.Errorf("writeIterative: failed to write branch node at height %d: %w",
 					height, err)
 			}
 
 			if top.isLeft {
-				keyLeaf = w.leafCounter
+				stack[len(stack)-2].keyLeaf = w.leafCounter
+
+				// keyLeaf = w.leafCounter
 			}
 
 			stackItemPool.Put(top)
